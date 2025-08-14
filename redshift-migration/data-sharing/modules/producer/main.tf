@@ -1,5 +1,33 @@
 # Producer serverless module - handles all write operations
 
+# Sequential creation controller - uses SAME lock file as consumers
+resource "null_resource" "creation_controller" {
+  provisioner "local-exec" {
+    command = <<-EOT
+      LOCK_FILE="/tmp/redshift-consumer-lock"
+      MAX_WAIT=300  # 5 minutes max wait
+      WAITED=0
+      
+      # Wait for lock to be available
+      while [ -f "$LOCK_FILE" ] && [ $WAITED -lt $MAX_WAIT ]; do
+        echo "Waiting for another workgroup to finish creating (waited $${WAITED}s)..."
+        sleep 10
+        WAITED=$((WAITED + 10))
+      done
+      
+      # Create our lock
+      echo "${var.namespace_name}" > "$LOCK_FILE"
+      
+      # Keep lock for creation duration
+      # 3 minutes to ensure AWS fully completes each workgroup
+      sleep 180
+      
+      # Release lock
+      rm -f "$LOCK_FILE"
+    EOT
+  }
+}
+
 # KMS key for encryption
 resource "aws_kms_key" "redshift" {
   description = "KMS key for Redshift producer encryption"
@@ -78,6 +106,8 @@ resource "aws_redshiftserverless_namespace" "producer" {
     Role        = "producer"
     Project     = var.project
   }
+  
+  depends_on = [null_resource.creation_controller]
 }
 
 # Redshift Serverless workgroup

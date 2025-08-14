@@ -1,5 +1,34 @@
 # Consumer serverless workgroup module - handles read operations
 
+# Sequential creation controller using null_resource
+resource "null_resource" "creation_controller" {
+  # This ensures sequential creation by using a global lock file
+  provisioner "local-exec" {
+    command = <<-EOT
+      LOCK_FILE="/tmp/redshift-consumer-lock"
+      MAX_WAIT=300  # 5 minutes max wait
+      WAITED=0
+      
+      # Wait for lock to be available
+      while [ -f "$LOCK_FILE" ] && [ $WAITED -lt $MAX_WAIT ]; do
+        echo "Waiting for another consumer to finish creating (waited $${WAITED}s)..."
+        sleep 10
+        WAITED=$((WAITED + 10))
+      done
+      
+      # Create our lock
+      echo "${var.namespace_name}" > "$LOCK_FILE"
+      
+      # Keep lock for creation duration (AWS needs time to process)
+      # 3 minutes to ensure AWS fully completes each workgroup
+      sleep 180
+      
+      # Release lock
+      rm -f "$LOCK_FILE"
+    EOT
+  }
+}
+
 # IAM role for consumer
 resource "aws_iam_role" "consumer" {
   name = "${var.namespace_name}-role"
@@ -20,8 +49,10 @@ resource "aws_iam_role" "consumer" {
   tags = {
     Name        = "${var.namespace_name}-role"
     Environment = var.environment
-    Purpose     = var.purpose
+    Type        = "generic-consumer"
   }
+  
+  depends_on = [null_resource.creation_controller]
 }
 
 # Attach managed policy
@@ -65,9 +96,12 @@ resource "aws_redshiftserverless_namespace" "consumer" {
   tags = {
     Name        = var.namespace_name
     Environment = var.environment
-    Purpose     = var.purpose
+    Type        = "generic-consumer"
     Role        = "consumer"
   }
+  
+  log_exports = [     "connectionlog",     "useractivitylog",     "userlog",   ]
+  depends_on = [null_resource.creation_controller]
 }
 
 # Serverless workgroup
@@ -102,7 +136,11 @@ resource "aws_redshiftserverless_workgroup" "consumer" {
   tags = {
     Name        = var.workgroup_name
     Environment = var.environment
-    Purpose     = var.purpose
+    Type        = "generic-consumer"
     Role        = "consumer"
+  }
+  
+  lifecycle {
+    ignore_changes = [config_parameter]
   }
 }

@@ -59,8 +59,8 @@ variable "producer_max_capacity" {
   default     = 256
 }
 
-variable "enable_datascience_consumer" {
-  description = "Enable data science consumer workgroup"
-  type        = bool
-  default     = false
+variable "consumer_count" {
+  description = "Number of generic consumer instances to create"
+  type        = number
+  default     = 3
 }

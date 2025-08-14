@@ -18,6 +18,22 @@ output "endpoint" {
   value       = aws_redshiftserverless_workgroup.consumer.endpoint
 }
 
+output "endpoint_address" {
+  description = "Workgroup endpoint address (without port)"
+  value       = try(aws_redshiftserverless_workgroup.consumer.endpoint[0].address, "")
+}
+
+output "vpc_endpoint_name" {
+  description = "Name of the VPC endpoint for lookup"
+  value = aws_redshiftserverless_endpoint_access.consumer.endpoint_name
+}
+
+output "vpc_endpoint_ips" {
+  description = "Private IPs from the VPC endpoint (via external data source)"
+  value = local.endpoint_ips
+}
+
+
 output "port" {
   description = "Workgroup port"
   value       = aws_redshiftserverless_workgroup.consumer.port

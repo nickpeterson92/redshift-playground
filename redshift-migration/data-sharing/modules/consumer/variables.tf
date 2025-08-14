@@ -57,9 +57,16 @@ variable "environment" {
   type        = string
 }
 
-variable "purpose" {
-  description = "Purpose of this consumer (analytics, reporting, etc)"
+variable "aws_region" {
+  description = "AWS region"
   type        = string
+  default     = "us-west-2"
+}
+
+variable "consumer_index" {
+  description = "Index number of this generic consumer instance"
+  type        = number
+  default     = 1
 }
 
 variable "publicly_accessible" {

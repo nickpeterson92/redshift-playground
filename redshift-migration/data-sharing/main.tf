@@ -21,7 +21,7 @@ module "networking" {
   allowed_ip  = var.allowed_ip
 }
 
-# Producer namespace for writes (now serverless)
+# Producer namespace for writes (serverless)
 module "producer" {
   source = "./modules/producer"
   
@@ -40,65 +40,62 @@ module "producer" {
   project     = var.project_name
 }
 
-# Consumer workgroups for reads
-module "consumer_analytics" {
-  source = "./modules/consumer"
+# Generic consumer workgroups - all identical for NLB distribution
+locals {
+  consumer_count = var.consumer_count
   
-  namespace_name = "${var.project_name}-analytics"
-  workgroup_name = "${var.project_name}-analytics-wg"
-  database_name  = "analytics_db"
-  admin_username = var.master_username
-  admin_password = var.master_password
-  
-  base_capacity = 32
-  max_capacity  = 128
-  
-  vpc_id            = module.networking.vpc_id
-  subnet_ids        = module.networking.subnet_ids
-  security_group_id = module.networking.consumer_security_group_id
-  
-  environment = var.environment
-  purpose     = "analytics"
+  # All consumers use the same configuration
+  consumer_base_capacity = 32
+  consumer_max_capacity  = 128
 }
 
-module "consumer_reporting" {
+# Create multiple generic consumer instances
+module "consumers" {
   source = "./modules/consumer"
-  
-  namespace_name = "${var.project_name}-reporting"
-  workgroup_name = "${var.project_name}-reporting-wg"
-  database_name  = "reporting_db"
+  count  = local.consumer_count
+
+  namespace_name = "${var.project_name}-consumer-${count.index + 1}"
+  workgroup_name = "${var.project_name}-consumer-wg-${count.index + 1}"
+  database_name  = "consumer_db"
   admin_username = var.master_username
   admin_password = var.master_password
   
-  base_capacity = 32
-  max_capacity  = 64  # Lower for reporting workload
+  # All consumers have identical capacity for even load distribution
+  base_capacity = local.consumer_base_capacity
+  max_capacity  = local.consumer_max_capacity
   
   vpc_id            = module.networking.vpc_id
   subnet_ids        = module.networking.subnet_ids
   security_group_id = module.networking.consumer_security_group_id
   
-  environment = var.environment
-  purpose     = "reporting"
+  environment    = var.environment
+  consumer_index = count.index + 1
+  aws_region     = var.aws_region
 }
 
-# Optional: Additional consumer for ML/Data Science workloads
-module "consumer_datascience" {
-  source = "./modules/consumer"
-  count  = var.enable_datascience_consumer ? 1 : 0
+# Network Load Balancer to distribute queries across consumers
+module "nlb" {
+  source = "./modules/nlb"
   
-  namespace_name = "${var.project_name}-datascience"
-  workgroup_name = "${var.project_name}-datascience-wg"
-  database_name  = "datascience_db"
-  admin_username = var.master_username
-  admin_password = var.master_password
+  project_name = var.project_name
+  environment  = var.environment
+  vpc_id       = module.networking.vpc_id
+  subnet_ids   = module.networking.subnet_ids
+  consumer_count = var.consumer_count
   
-  base_capacity = 64
-  max_capacity  = 256  # Higher for ML workloads
+  # Create endpoint list using stable VPC endpoint IPs for NLB
+  # Use try() to handle cases where endpoints don't exist yet or during destroy
+  consumer_endpoints = try(
+    flatten([
+      for idx, consumer in module.consumers : [
+        for ip in try(consumer.vpc_endpoint_ips, []) : {
+          address = ip
+          port    = try(consumer.port, 5439)
+        }
+      ] if length(try(consumer.vpc_endpoint_ips, [])) > 0
+    ]),
+    []
+  )
   
-  vpc_id            = module.networking.vpc_id
-  subnet_ids        = module.networking.subnet_ids
-  security_group_id = module.networking.consumer_security_group_id
-  
-  environment = var.environment
-  purpose     = "datascience"
+  depends_on = [module.consumers]
 }
