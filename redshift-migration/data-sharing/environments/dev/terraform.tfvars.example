@@ -1,0 +1,14 @@
+aws_region   = "us-west-2"
+project_name = "airline"
+environment  = "dev"
+
+# Database credentials
+master_username = "admin"
+master_password = "ChangeMe123"  # Use a strong password!
+
+# Network configuration
+allowed_ip = "YOUR.IP.ADDRESS.HERE/32"  # Replace with your actual IP
+
+# Number of generic consumers for NLB distribution
+# Note: AWS has issues with 4+ concurrent workgroups - recommend 2-3
+consumer_count = 2

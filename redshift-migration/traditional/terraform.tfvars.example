@@ -1,0 +1,18 @@
+# AWS Configuration
+aws_region = "us-west-2"
+
+# Cluster Configuration
+cluster_identifier   = "my-redshift-cluster"
+database_name       = "mydb"
+master_username     = "admin"
+master_password     = "ChangeMe123"  # Use a strong password!
+node_type          = "dc2.large"
+number_of_nodes    = 2
+
+# Network Configuration
+allowed_ip = "YOUR.IP.ADDRESS.HERE/32"  # Replace with your actual IP address
+
+# Optional: VPC Configuration
+# If you have an existing VPC, uncomment and set these:
+# vpc_id     = "vpc-xxxxxxxxx"
+# subnet_ids = ["subnet-xxxxxx", "subnet-yyyyyy"]

@@ -1,3 +1,14 @@
+# Infrastructure outputs for test instance
+output "vpc_id" {
+  description = "VPC ID for test instance deployment"
+  value       = module.networking.vpc_id
+}
+
+output "subnet_ids" {
+  description = "Subnet IDs for test instance deployment"
+  value       = module.networking.subnet_ids
+}
+
 output "producer_namespace_id" {
   description = "Producer namespace ID for data sharing setup"
   value       = module.producer.namespace_id
@@ -59,9 +70,9 @@ output "data_sharing_commands" {
     CREATE DATABASE airline_shared FROM DATASHARE airline_share OF NAMESPACE '${module.producer.namespace_id}';
     
     # Verify the share is working:
-    SELECT * FROM airline_shared.airline_dw.flights LIMIT 10;
-    SELECT * FROM airline_shared.airline_dw.airlines LIMIT 10;
-    SELECT * FROM airline_shared.airline_dw.airports LIMIT 10;
+    SELECT * FROM airline_shared.airline_dw.dim_aircraft LIMIT 10;
+    SELECT * FROM airline_shared.airline_dw.dim_airport LIMIT 10;
+    SELECT * FROM airline_shared.airline_dw.fact_bookings LIMIT 10;
   EOT
 }
 

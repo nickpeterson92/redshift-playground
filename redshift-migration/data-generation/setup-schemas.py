@@ -11,7 +11,7 @@ conn_params = {
     'port': 5439,
     'database': 'mydb',
     'user': 'admin',
-    'password': 'P4ssw0rd123!'
+    'password': 'Password123'
 }
 
 try:

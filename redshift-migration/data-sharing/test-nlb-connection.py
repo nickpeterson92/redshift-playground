@@ -35,8 +35,8 @@ def test_connection(connection_num, host, database, username, password):
         
         result = cursor.fetchone()
         
-        # Try to query the shared data
-        cursor.execute("SELECT COUNT(*) FROM airline_shared.airline_dw.flights")
+        # Try to query the shared data (using correct table name)
+        cursor.execute("SELECT COUNT(*) FROM airline_shared.airline_dw.dim_aircraft")
         flight_count = cursor.fetchone()[0]
         
         cursor.close()
@@ -48,7 +48,7 @@ def test_connection(connection_num, host, database, username, password):
             'namespace': result[1],
             'backend_pid': result[2],
             'server_addr': result[3],
-            'flight_count': flight_count,
+            'aircraft_count': flight_count,
             'status': 'SUCCESS'
         }
         

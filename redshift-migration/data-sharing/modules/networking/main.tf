@@ -146,6 +146,15 @@ resource "aws_security_group" "consumer" {
     cidr_blocks = [var.allowed_ip]
     description = "Redshift port - user access"
   }
+  
+  # Allow access from within VPC (for NLB health checks and connections)
+  ingress {
+    from_port   = 5439
+    to_port     = 5439
+    protocol    = "tcp"
+    cidr_blocks = ["10.0.0.0/16"]  # VPC CIDR
+    description = "Redshift port - VPC internal access (NLB)"
+  }
 
   egress {
     from_port   = 0
