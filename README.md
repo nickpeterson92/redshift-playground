@@ -66,11 +66,11 @@ redshift-playground/
                              │
                 ┌────────────┴────────────┐
                 │                         │
-        ┌───────▼────────┐      ┌────────▼────────┐
-        │   Analytics    │      │   Reporting     │
-        │   Consumer     │      │   Consumer      │
-        │   (Read Only)  │      │   (Read Only)   │
-        └────────────────┘      └─────────────────┘
+        ┌───────▼────────┐      ┌─────────▼────────┐
+        │   Analytics    │      │    Reporting     │
+        │   Consumer     │      │    Consumer      │
+        │   (Read Only)  │      │    (Read Only)   │
+        └────────────────┘      └──────────────────┘
 ```
 
 #### Advanced NLB Architecture (Horizontal Scaling)
@@ -87,10 +87,10 @@ redshift-playground/
         ▼        ▼        ▼        ▼
    ┌────────┐┌────────┐┌────────┐┌────────┐
    │Consumer││Consumer││Consumer││Consumer│
-   │   1    ││   2    ││   3    ││   N    │
+   │    1   ││   2    ││   3    ││   N    │
    │ 32 RPU ││ 32 RPU ││ 32 RPU ││ 32 RPU │
    └───┬────┘└───┬────┘└───┬────┘└───┬────┘
-        └────────┼────────┼────────┘
+       └─────────┼─────────┼─────────┘
                  │ VPC Endpoints
           ┌──────▼──────────┐
           │      NLB        │
