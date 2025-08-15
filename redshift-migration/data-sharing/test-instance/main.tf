@@ -21,9 +21,11 @@ provider "aws" {
 
 # Import existing infrastructure data from data-sharing deployment
 data "terraform_remote_state" "redshift" {
-  backend = "local"
+  backend = "s3"
   config = {
-    path = "../terraform.tfstate"
+    bucket = "terraform-state-redshift-migration"
+    key    = "redshift-data-sharing/dev/terraform.tfstate"
+    region = "us-west-2"
   }
 }
 

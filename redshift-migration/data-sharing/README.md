@@ -1,6 +1,14 @@
-# Redshift Data Sharing - Modular Terraform
+# Redshift Serverless Data Sharing with NLB
 
-This is a production-ready, modular Terraform configuration for implementing Redshift data sharing architecture with read/write separation.
+Production-ready implementation of AWS Redshift Serverless with horizontal scaling through Network Load Balancer (NLB) and data sharing.
+
+## 🎯 Architecture Goals
+
+1. **Separation of Concerns**: Producer handles writes, consumers handle reads
+2. **Horizontal Scaling**: Add more consumers as read demand grows
+3. **High Availability**: Multiple consumers provide redundancy
+4. **Cost Efficiency**: Serverless model with auto-scaling
+5. **Load Distribution**: NLB evenly distributes queries
 
 ## Architecture
 
@@ -13,7 +21,7 @@ This is a production-ready, modular Terraform configuration for implementing Red
 ┌─────────────────┐     DATA SHARING
 │  Producer       │ ═══════════════════╗
 │  Cluster        │                    ║
-│  (RA3 Node)     │ ═══════════════╗  ║
+│  (RA3 Node)     │ ════════════════╗  ║
 └─────────────────┘                 ║  ║
                                     ▼  ▼
                     ┌─────────────────────┐
