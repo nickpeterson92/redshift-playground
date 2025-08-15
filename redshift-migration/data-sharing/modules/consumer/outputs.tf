@@ -43,3 +43,8 @@ output "iam_role_arn" {
   description = "IAM role ARN"
   value       = aws_iam_role.consumer.arn
 }
+
+output "ready" {
+  description = "Indicates workgroup is ready (used for dependencies)"
+  value       = null_resource.wait_for_availability.id
+}

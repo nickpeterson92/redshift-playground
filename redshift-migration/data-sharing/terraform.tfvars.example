@@ -1,0 +1,51 @@
+# Example Terraform Variables for Data Sharing Deployment
+# Copy this to terraform.tfvars and update with your values
+
+# ========================================
+# Basic Configuration
+# ========================================
+aws_region      = "us-west-2"
+project_name    = "airline"
+environment     = "dev"
+master_password = "YourSecurePassword123!"  # Change this!
+allowed_ip      = "YOUR.IP.ADDRESS.HERE/32" # Get from: curl ifconfig.me
+
+# ========================================
+# Network Configuration
+# ========================================
+
+# Option 1: Create new VPC (DEFAULT - Standalone deployment)
+create_vpc     = true
+create_subnets = true
+vpc_name       = "redshift-vpc"
+vpc_cidr       = "10.0.0.0/16"
+subnet_cidrs   = ["10.0.0.0/23", "10.0.2.0/23", "10.0.4.0/23"]
+
+# Option 2: Use existing VPC (if you deployed traditional first)
+# create_vpc     = false
+# create_subnets = false
+# vpc_name       = "redshift-vpc"  # Name of existing VPC to look up
+
+# ========================================
+# Producer Configuration
+# ========================================
+producer_base_capacity = 32   # Minimum RPUs
+producer_max_capacity  = 256  # Maximum RPUs for auto-scaling
+
+# ========================================
+# Consumer Configuration
+# ========================================
+consumer_count = 3  # Number of identical consumers for NLB
+
+# Note: All consumers use identical configuration (32-128 RPUs)
+# This is hardcoded in main.tf for proper load balancing
+
+# ========================================
+# Optional: Specific Consumer Sizing
+# ========================================
+# If not using NLB, you can have different sized consumers:
+# - Analytics Consumer: 64-256 RPUs (heavy queries)
+# - Reporting Consumer: 32-128 RPUs (dashboards)
+# - ML Consumer: 128-512 RPUs (data science)
+
+# But with NLB, all must be identical for even distribution

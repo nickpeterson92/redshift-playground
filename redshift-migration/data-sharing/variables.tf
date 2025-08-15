@@ -22,6 +22,30 @@ variable "vpc_name" {
   default     = "redshift-vpc"
 }
 
+variable "create_vpc" {
+  description = "Whether to create a new VPC (true) or use existing (false)"
+  type        = bool
+  default     = true  # Default to creating VPC since we don't need traditional anymore
+}
+
+variable "vpc_cidr" {
+  description = "CIDR block for the VPC"
+  type        = string
+  default     = "10.0.0.0/16"
+}
+
+variable "create_subnets" {
+  description = "Whether to create new subnets"
+  type        = bool
+  default     = true  # Default to creating subnets
+}
+
+variable "subnet_cidrs" {
+  description = "CIDR blocks for the subnets (need 3 for different AZs)"
+  type        = list(string)
+  default     = ["10.0.0.0/23", "10.0.2.0/23", "10.0.4.0/23"]  # /23 = 512 IPs each
+}
+
 variable "database_name" {
   description = "Name of the database"
   type        = string

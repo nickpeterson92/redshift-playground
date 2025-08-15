@@ -16,9 +16,13 @@ provider "aws" {
 module "networking" {
   source = "./modules/networking"
   
-  vpc_name    = var.vpc_name
-  environment = var.environment
-  allowed_ip  = var.allowed_ip
+  vpc_name       = var.vpc_name
+  environment    = var.environment
+  allowed_ip     = var.allowed_ip
+  create_vpc     = var.create_vpc
+  vpc_cidr       = var.vpc_cidr
+  create_subnets = var.create_subnets
+  subnet_cidrs   = var.subnet_cidrs
 }
 
 # Producer namespace for writes (serverless)
@@ -71,6 +75,10 @@ module "consumers" {
   environment    = var.environment
   consumer_index = count.index + 1
   aws_region     = var.aws_region
+  
+  # CRITICAL: Consumers must wait for producer to be created first
+  # This ensures data sharing can be established properly
+  depends_on = [module.producer]
 }
 
 # Network Load Balancer to distribute queries across consumers

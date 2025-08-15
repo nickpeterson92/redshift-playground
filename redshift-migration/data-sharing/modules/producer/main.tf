@@ -1,30 +1,15 @@
 # Producer serverless module - handles all write operations
 
-# Sequential creation controller - uses SAME lock file as consumers
+# Sequential creation controller with atomic locking
 resource "null_resource" "creation_controller" {
+  # This ensures sequential creation using atomic lock operations
   provisioner "local-exec" {
-    command = <<-EOT
-      LOCK_FILE="/tmp/redshift-consumer-lock"
-      MAX_WAIT=300  # 5 minutes max wait
-      WAITED=0
-      
-      # Wait for lock to be available
-      while [ -f "$LOCK_FILE" ] && [ $WAITED -lt $MAX_WAIT ]; do
-        echo "Waiting for another workgroup to finish creating (waited $${WAITED}s)..."
-        sleep 10
-        WAITED=$((WAITED + 10))
-      done
-      
-      # Create our lock
-      echo "${var.namespace_name}" > "$LOCK_FILE"
-      
-      # Keep lock for creation duration
-      # 3 minutes to ensure AWS fully completes each workgroup
-      sleep 180
-      
-      # Release lock
-      rm -f "$LOCK_FILE"
-    EOT
+    command = "${path.module}/sequential_create.sh '${var.namespace_name}' '${var.namespace_name}-workgroup'"
+  }
+  
+  # Trigger on any variable change
+  triggers = {
+    namespace = var.namespace_name
   }
 }
 
@@ -132,5 +117,19 @@ resource "aws_redshiftserverless_workgroup" "producer" {
     Environment = var.environment
     Role        = "producer"
     Project     = var.project
+  }
+}
+
+# Wait for workgroup to be fully available before allowing consumers to start
+resource "null_resource" "wait_for_availability" {
+  depends_on = [aws_redshiftserverless_workgroup.producer]
+  
+  provisioner "local-exec" {
+    command = "${path.module}/wait_for_workgroup.sh '${var.namespace_name}-workgroup' '${var.namespace_name}'"
+  }
+  
+  # Trigger on workgroup changes
+  triggers = {
+    workgroup_id = aws_redshiftserverless_workgroup.producer.id
   }
 }

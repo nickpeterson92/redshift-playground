@@ -1,6 +1,10 @@
 # Redshift Serverless Data Sharing with Network Load Balancer
 
-🚀 **Production-ready implementation** of AWS Redshift Serverless featuring horizontal scaling through Network Load Balancer (NLB), data sharing patterns, and comprehensive testing infrastructure.
+🚀 **Production-ready standalone deployment** of AWS Redshift Serverless featuring:
+- Self-contained infrastructure (creates own VPC)
+- Horizontal scaling through Network Load Balancer (NLB)
+- Data sharing patterns with read/write separation
+- Comprehensive monitoring and diagnostic tools
 
 ## 🎯 Architecture Goals
 
@@ -92,8 +96,9 @@ Note: Producer handles writes directly. NLB distributes read queries across iden
 ```
 data-sharing/
 ├── main.tf                 # Root module orchestration
-├── variables.tf           # Input variables  
+├── variables.tf           # Input variables (includes VPC creation)  
 ├── outputs.tf             # Output values & commands
+├── terraform.tfvars.example # Example configuration (standalone)
 ├── backend.tf             # State management config
 ├── modules/
 │   ├── networking/        # VPC, subnets, security groups
@@ -163,36 +168,37 @@ data-sharing/
 ### 1. Set Up Remote State Backend (First Time Only)
 
 ```bash
-cd data-sharing
-./scripts/setup-backend.sh
+cd data-sharing/backend-setup
+terraform init
+terraform apply
+# Note the output values for backend configuration
 ```
 
 ### 2. Configure Environment
 
 ```bash
-cp environments/dev/terraform.tfvars environments/dev/terraform.tfvars.local
-# Edit terraform.tfvars.local with your settings
+cd ../
+cp terraform.tfvars.example terraform.tfvars
+# Edit terraform.tfvars with your settings:
+# - Set your IP address (get from: curl ifconfig.me)
+# - Set a secure password
+# - Keep create_vpc = true (default)
 ```
 
-### 3. Initialize Terraform with Backend
+### 3. Deploy Infrastructure
 
 ```bash
-# Initialize with backend config
-terraform init -backend-config=environments/dev/backend-config.hcl
+# Update backend.tf with values from step 1
+vim backend.tf  # Add bucket and dynamodb_table values
 
-# Create workspace for environment
-terraform workspace new dev
+# Initialize Terraform
+terraform init
+
+# Deploy everything
+terraform apply
 ```
 
-### 4. Deploy Infrastructure
-
-```bash
-# Plan with variables
-terraform plan -var-file=environments/dev/terraform.tfvars.local
-
-# Apply
-terraform apply -var-file=environments/dev/terraform.tfvars.local
-```
+**Note**: This creates its own VPC by default. No need for traditional deployment!
 
 ### 5. Set Up Data Sharing
 
@@ -237,6 +243,39 @@ terraform init && terraform apply
 # Diagnose any issues
 ./diagnose.sh
 ```
+
+## 🌐 Network Configuration Options
+
+### Default: Create New VPC (Recommended)
+The deployment creates its own VPC by default with proper configuration for Redshift Serverless:
+
+```hcl
+# In terraform.tfvars (these are the defaults)
+create_vpc     = true
+create_subnets = true
+vpc_cidr       = "10.0.0.0/16"
+subnet_cidrs   = ["10.0.0.0/23", "10.0.2.0/23", "10.0.4.0/23"]
+```
+
+### Alternative: Use Existing VPC
+If you need to use an existing VPC:
+
+```hcl
+# In terraform.tfvars
+create_vpc     = false
+create_subnets = false
+vpc_name       = "existing-vpc-name"  # Must match Name tag of existing VPC
+```
+
+**When to use existing VPC**:
+- Integrating with existing infrastructure
+- Corporate networking requirements
+- Shared services VPC
+
+**Requirements for existing VPC**:
+- Must have subnets in 3+ availability zones
+- Each subnet needs 32+ available IPs
+- DNS hostnames and DNS resolution enabled
 
 ## 📦 Module Details
 
@@ -359,6 +398,42 @@ Each environment can have different:
 
 ## 🔍 Troubleshooting
 
+### Monitoring Tools
+
+We provide diagnostic scripts to help identify issues during deployment:
+
+#### Real-time Deployment Monitor
+```bash
+# Monitor all workgroups during deployment
+./scripts/monitor-deployment.sh
+
+# Custom refresh interval (default 10 seconds)
+./scripts/monitor-deployment.sh 5
+```
+
+Shows:
+- Current status of all workgroups and namespaces
+- VPC endpoint states
+- Subnet IP availability warnings
+- Recent CloudTrail events
+- Elapsed time and timeout warnings
+
+#### Workgroup Diagnostics
+```bash
+# Diagnose all workgroups
+./scripts/diagnose-workgroup.sh
+
+# Diagnose specific workgroup
+./scripts/diagnose-workgroup.sh airline-consumer-1
+```
+
+Checks:
+- Workgroup and namespace status
+- VPC endpoint configuration
+- Subnet IP availability
+- Resource limits and RPU allocation
+- Time stuck in MODIFYING state
+
 ### Common Issues & Solutions
 
 1. **Subnet Configuration Errors**
@@ -386,9 +461,109 @@ Each environment can have different:
    - **Solution**: Ensure NLB security group allows your IP
    - **Test**: Use test-instance scripts to validate
 
+6. **Workgroup Stuck in MODIFYING State**
+   - **Common Causes**:
+     - Subnet IP exhaustion (need ~32 IPs per workgroup)
+     - Another workgroup operation in progress
+     - AWS service delays (can take 15-20 minutes)
+     - VPC endpoint creation delays
+   - **Diagnosis**:
+     ```bash
+     # Check workgroup status and details
+     ./scripts/diagnose-workgroup.sh <workgroup-name>
+     
+     # Monitor in real-time
+     ./scripts/monitor-deployment.sh
+     ```
+   - **Solutions**:
+     1. **Wait**: AWS can be slow, wait 15-20 minutes
+     2. **Check IPs**: Verify subnet has >32 available IPs
+     3. **Check Limits**: Ensure not hitting account limits
+     4. **Sequential Creation**: Module now enforces sequential creation
+     5. **Last Resort**: Delete and recreate if stuck >30 minutes
+   - **Prevention**:
+     - Use /23 subnets (512 IPs) minimum
+     - Deploy consumers sequentially (built into module)
+     - Monitor during deployment
+     - Check AWS service health dashboard
+
+### Atomic Locking Mechanism for Sequential Workgroup Creation
+
+This deployment uses an innovative atomic locking mechanism to prevent AWS API race conditions when creating multiple Redshift Serverless workgroups. This solves a critical issue where concurrent workgroup creation causes workgroups to get stuck in "MODIFYING" state.
+
+#### The Problem
+- AWS Redshift Serverless API can't handle multiple simultaneous workgroup creation requests
+- Terraform's `count` parameter creates resources in parallel by default
+- Concurrent creation leads to workgroups stuck in "MODIFYING" state indefinitely
+- Traditional file-based locks have race conditions (multiple processes can check and create simultaneously)
+
+#### The Solution: Atomic Directory-Based Locking
+Our modules use `mkdir` as an atomic operation - only one process can successfully create a directory:
+
+```bash
+# Location of the lock directory
+/tmp/redshift-consumer-lock.d/lock/
+
+# Lock contents
+owner       # Process ID and namespace that holds the lock
+workgroup   # Name of workgroup being created
+timestamp   # When lock was acquired (for stale lock detection)
+```
+
+#### How It Works
+
+1. **Lock Acquisition** (sequential_create.sh):
+   ```bash
+   # Try to create lock directory atomically
+   if mkdir "$LOCK_FILE" 2>/dev/null; then
+       # Success! We have the lock
+       echo "$my_id" > "$LOCK_FILE/owner"
+   else
+       # Failed - another process has the lock, wait
+   fi
+   ```
+
+2. **Creation Sequence**:
+   - Producer module acquires lock → creates workgroup → waits for AVAILABLE → releases lock
+   - Consumer 1 acquires lock → creates workgroup → waits for AVAILABLE → releases lock
+   - Consumer 2 acquires lock → creates workgroup → waits for AVAILABLE → releases lock
+   - And so on...
+
+3. **Stale Lock Detection**:
+   - Checks timestamp to detect locks older than 10 minutes
+   - Queries AWS to see if the locking workgroup is actually AVAILABLE
+   - Automatically cleans up stale locks
+
+4. **Wait Script** (wait_for_workgroup.sh):
+   - Polls AWS API until workgroup status is "AVAILABLE"
+   - Handles AWS API propagation delays gracefully
+   - Only releases lock after workgroup is fully ready
+
+#### Benefits
+- **No Race Conditions**: `mkdir` is atomic at the OS level
+- **Self-Healing**: Automatic stale lock cleanup
+- **Minimal Overhead**: Next workgroup starts immediately after previous completes
+- **Terraform Native**: Works seamlessly with Terraform's lifecycle
+- **Debugging Friendly**: Lock files contain diagnostic information
+
+#### Scaling Considerations
+- Adding consumers via `consumer_count` in tfvars automatically uses this mechanism
+- Each new consumer waits its turn, preventing API conflicts
+- Typical creation time: 2-3 minutes per workgroup
+- Total time for N consumers: ~3N minutes (sequential, not parallel)
+
 ### Useful Commands
 
 ```bash
+# Monitor lock status during deployment
+ls -la /tmp/redshift-consumer-lock.d/lock/
+
+# Check which workgroup holds the lock
+cat /tmp/redshift-consumer-lock.d/lock/owner
+
+# Manually clean up lock if needed (use with caution!)
+rm -rf /tmp/redshift-consumer-lock.d/lock
+
 # Check deployment status
 terraform show
 
@@ -397,6 +572,16 @@ terraform destroy -target=module.consumer_reporting
 
 # Import existing resources
 terraform import module.producer.aws_redshift_cluster.producer my-existing-cluster
+
+# Force recreation of stuck workgroup
+terraform taint module.consumer_3.aws_redshiftserverless_workgroup.consumer
+terraform apply
+
+# Check workgroup status via AWS CLI
+aws redshiftserverless list-workgroups --query 'workgroups[*].[workgroupName,status]' --output table
+
+# Get detailed workgroup info
+aws redshiftserverless get-workgroup --workgroup-name <name> --query 'workgroup.{Status:status,Created:createdAt,Endpoint:endpoint.address}'
 ```
 
 ## 🎯 Next Steps & Advanced Topics

@@ -5,10 +5,11 @@ A comprehensive AWS Redshift implementation showcasing migration strategies, ser
 ## 🚀 Project Overview
 
 This project demonstrates:
-- Migration from traditional Redshift clusters to serverless architecture
-- Production-grade data sharing with read/write separation
+- **Primary**: Production-grade Redshift Serverless with data sharing
+- **Optional**: Traditional Redshift cluster for initial data loading
 - Horizontal scaling using Network Load Balancer (NLB)
-- Cost optimization strategies with auto-pause and right-sizing
+- Read/write separation with producer/consumer pattern
+- Cost optimization with auto-pause and right-sizing
 - Real-world airline data model with star schema design
 
 ## Project Structure
@@ -17,13 +18,17 @@ This project demonstrates:
 redshift-playground/
 ├── README.md                # This file
 └── redshift-migration/
-    ├── traditional/         # Traditional Redshift cluster deployment
-    │   ├── redshift.tf      # VPC + cluster infrastructure (3 AZs)
-    │   └── terraform.tfvars # Configuration values
-    ├── serverless/          # Standalone Redshift Serverless
-    │   ├── redshift-serverless.tf
-    │   └── terraform.tfvars
-    ├── data-sharing/        # Production data sharing architecture
+    ├── data-sharing/        # 🎯 PRIMARY: Production serverless architecture
+    │   ├── main.tf          # Root module orchestration
+    │   ├── variables.tf     # Input variables
+    │   ├── outputs.tf       # Data sharing commands
+    │   ├── terraform.tfvars.example # Example configuration
+    │   └── modules/         # Terraform modules
+    ├── traditional/         # 💾 OPTIONAL: For initial data loading only
+    │   ├── redshift.tf      # Traditional cluster + VPC
+    │   ├── README.md        # When/why you might need this
+    │   └── terraform.tfvars.example
+    ├── serverless/          # 📦 DEPRECATED: Use data-sharing instead
     │   ├── modules/         # Terraform modules
     │   │   ├── producer/    # Write-optimized namespace
     │   │   ├── consumer/    # Read-optimized workgroups
@@ -133,80 +138,95 @@ Note: Producer handles writes directly. NLB only distributes read queries.
 
 ## 🎯 Implementation Status
 
-### ✅ Phase 1: Infrastructure Setup
-- Traditional cluster with proper VPC (3 AZs, /23 subnets)
-- Serverless data sharing architecture
+### ✅ Phase 1: Serverless Architecture
+- Standalone data sharing deployment with VPC creation
+- Producer namespace for write operations
+- Multiple identical consumers for read scaling
 - Remote state management with S3/DynamoDB
 
-### ✅ Phase 2: Data Loading & Migration
-- Generated airline star schema data
-- Loaded into traditional cluster
-- Created snapshot
-- Restored to serverless producer
+### ✅ Phase 2: Advanced Features
+- Network Load Balancer for horizontal scaling
+- Diagnostic tools for monitoring deployments
+- Sequential workgroup creation to prevent conflicts
+- VPC endpoint support for private connectivity
 
-### ✅ Phase 3: Data Sharing Setup
-- Created datashare on producer
-- Granted access to consumers
-- Created shared databases on consumers
-- Verified cross-namespace queries
+### ✅ Phase 3: Production Readiness
+- Data sharing across namespaces
+- Auto-pause for cost optimization
+- Health monitoring and diagnostics
+- Comprehensive troubleshooting tools
 
 ## Quick Start Guide
 
 ### Prerequisites
 - AWS account with appropriate permissions
 - Terraform >= 1.0
-- Python 3.x with psycopg2-binary
 - AWS CLI configured
+- Python 3.x with psycopg2-binary (only if loading new data)
 
-### 1. Deploy Backend Infrastructure
+### Option A: Fresh Deployment (Recommended)
+
+#### 1. Deploy Backend Infrastructure
 ```bash
-cd data-sharing/backend-setup
+cd redshift-migration/data-sharing/backend-setup
 terraform init
 terraform apply
 # Note the output values for backend configuration
 ```
 
-### 2. Deploy Traditional Cluster
+#### 2. Deploy Data Sharing Architecture
 ```bash
-cd ../../traditional
+cd ../
+# Copy and update terraform.tfvars
+cp terraform.tfvars.example terraform.tfvars
+# Edit terraform.tfvars with your IP and password
+
+# Update backend.tf with values from step 1
 terraform init
-terraform apply -var="master_password=YourSecurePassword123!"
+terraform apply
 ```
 
-### 3. Load Sample Data
+#### 3. Restore Existing Snapshot (If Available)
+```bash
+# If you have a snapshot with data:
+# AWS Console → Redshift Serverless → Producer namespace → Restore from snapshot
+```
+
+#### 4. Setup Data Sharing
+```bash
+# Run the SQL commands from terraform output
+terraform output data_sharing_commands
+```
+
+### Option B: With Initial Data Loading (Traditional)
+
+**Only needed if you don't have a snapshot and need to create sample data**
+
+#### 1. Deploy Traditional Cluster
+```bash
+cd redshift-migration/traditional
+terraform init
+terraform apply -var="master_password=YourPassword123!"
+```
+
+#### 2. Load Sample Data
 ```bash
 cd ../data-generation
-# Update connection details in script
 python generate-airline-data-simple.py
 ```
 
-### 4. Create Snapshot
+#### 3. Create Snapshot & Destroy Cluster
 ```bash
-# In AWS Console or CLI
 aws redshift create-cluster-snapshot \
   --cluster-identifier my-redshift-cluster \
   --snapshot-identifier airline-data-snapshot
+
+# Destroy traditional cluster to save costs
+cd ../traditional
+terraform destroy
 ```
 
-### 5. Deploy Data Sharing Architecture
-```bash
-cd ../data-sharing
-# Update backend.tf with values from step 1
-terraform init
-terraform apply -var="master_password=YourSecurePassword123!"
-```
-
-### 6. Restore Snapshot to Producer
-```bash
-# Use AWS Console to restore snapshot to airline-producer namespace
-```
-
-### 7. Setup Data Sharing
-```bash
-# Run the SQL commands from terraform output on appropriate namespaces
-# Producer: CREATE DATASHARE, GRANT USAGE
-# Consumers: CREATE DATABASE FROM DATASHARE
-```
+#### 4. Continue with Option A from step 1
 
 ## 🔑 Key Features & Innovations
 
