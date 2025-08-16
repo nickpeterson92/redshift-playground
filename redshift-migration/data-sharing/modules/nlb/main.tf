@@ -62,21 +62,23 @@ resource "aws_lb_listener" "redshift" {
   }
 }
 
-# Target group attachments using private IPs
-# Using static count based on consumer_count to avoid dynamic issues
-resource "aws_lb_target_group_attachment" "consumer_attachments" {
-  count = var.consumer_count
-
-  target_group_arn = aws_lb_target_group.redshift_consumers.arn
-  # Use try() to handle cases where endpoints might not exist yet
-  target_id        = try(var.consumer_endpoints[count.index].address, "10.0.0.${count.index + 1}")
-  port             = try(var.consumer_endpoints[count.index].port, 5439)
-
-  depends_on = [aws_lb_target_group.redshift_consumers]
-  
-  lifecycle {
-    create_before_destroy = true
-    # Ignore changes to target_id during destroy
-    ignore_changes = [target_id]
+# Manage target group attachments via script to avoid Terraform lifecycle issues
+# This allows seamless addition/removal of consumers without recreating attachments
+resource "null_resource" "manage_targets" {
+  triggers = {
+    consumer_count = var.consumer_count
+    target_group = aws_lb_target_group.redshift_consumers.id
+    # Trigger update when endpoints change
+    endpoints_hash = md5(jsonencode(var.consumer_endpoints))
   }
+
+  # Update targets after any change
+  provisioner "local-exec" {
+    command = "${path.root}/scripts/deployment/update-nlb-targets.sh '${var.project_name}' '${data.aws_region.current.name}'"
+  }
+  
+  depends_on = [aws_lb_target_group.redshift_consumers]
 }
+
+# Data source for current region
+data "aws_region" "current" {}

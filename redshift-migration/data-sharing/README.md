@@ -230,7 +230,25 @@ module "nlb" {
 }
 ```
 
-### 7. Test NLB Connectivity
+### 7. Monitor Deployment (NEW! 🎉)
+
+```bash
+# Option 1: Deploy with integrated monitoring (recommended)
+./scripts/deploy-with-monitor.sh
+
+# Option 2: Run monitor separately in another terminal
+terraform apply              # Terminal 1
+./scripts/deploy-monitor.sh  # Terminal 2
+
+# Features:
+# - Real-time EKG heartbeat animation
+# - Lock status tracking
+# - Workgroup creation progress
+# - Success fireworks 🎆 or failure explosion 💥
+# - Automatic phase detection
+```
+
+### 8. Test NLB Connectivity
 
 ```bash
 # Deploy test infrastructure
@@ -551,6 +569,22 @@ timestamp   # When lock was acquired (for stale lock detection)
 - Each new consumer waits its turn, preventing API conflicts
 - Typical creation time: 2-3 minutes per workgroup
 - Total time for N consumers: ~3N minutes (sequential, not parallel)
+
+### Monitoring Scripts
+
+```bash
+# Full deployment monitor with EKG heartbeat and progress tracking
+./scripts/deploy-monitor.sh
+
+# Deploy with integrated monitoring (splits terminal with tmux if available)
+./scripts/deploy-with-monitor.sh
+
+# Original workgroup status monitor
+./scripts/monitor-deployment.sh
+
+# Diagnose stuck workgroups
+./scripts/diagnose-workgroup.sh <workgroup-name>
+```
 
 ### Useful Commands
 

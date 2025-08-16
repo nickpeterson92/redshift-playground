@@ -1,0 +1,41 @@
+# Redshift Playground - Complete Python Dependencies
+# Install all: pip install -r requirements.txt
+# Install minimal: pip install psycopg2-binary
+
+# ===== Core Dependencies =====
+# Database connectivity (REQUIRED for data generation and testing)
+# Note: For Python 3.13+, psycopg2-binary 2.9.9 won't work. Use one of these options:
+# Option 1: Use psycopg (version 3) - the modern replacement
+psycopg[binary]==3.1.18  # Modern PostgreSQL adapter with binary dependencies
+# Option 2: If you need psycopg2 specifically, install from source with system PostgreSQL
+# psycopg2==2.9.9  # Requires: brew install postgresql@14 (or your version)
+
+# ===== Monitoring Dependencies =====
+# For the fancy Python deployment monitor (scripts/deploy-monitor.py)
+rich==13.7.0  # Rich terminal formatting for beautiful monitoring output
+
+# ===== AWS Dependencies (Optional) =====
+# Only needed if you want to use Python AWS SDK instead of AWS CLI
+boto3==1.34.11  # AWS SDK for Python
+botocore==1.34.11  # Core functionality of boto3
+
+# ===== Development Tools (Optional) =====
+# Code quality and testing
+pytest==7.4.3  # Testing framework
+pytest-cov==4.1.0  # Coverage plugin for pytest
+black==23.12.1  # Code formatter
+flake8==6.1.0  # Linting
+mypy==1.8.0  # Static type checking
+
+# ===== Data Analysis (Optional) =====
+# If you want to analyze the generated data
+pandas==2.1.4  # Data manipulation
+numpy==1.26.2  # Numerical computing
+matplotlib==3.8.2  # Plotting
+seaborn==0.13.0  # Statistical visualization
+
+# ===== Utility Libraries (Optional) =====
+python-dotenv==1.0.0  # Load environment variables from .env file
+click==8.1.7  # Command line interface creation
+tabulate==0.9.0  # Pretty-print tabular data
+colorama==0.4.6  # Colored terminal output

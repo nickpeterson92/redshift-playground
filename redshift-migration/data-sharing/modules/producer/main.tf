@@ -1,17 +1,5 @@
 # Producer serverless module - handles all write operations
-
-# Sequential creation controller with atomic locking
-resource "null_resource" "creation_controller" {
-  # This ensures sequential creation using atomic lock operations
-  provisioner "local-exec" {
-    command = "${path.module}/sequential_create.sh '${var.namespace_name}' '${var.namespace_name}-workgroup'"
-  }
-  
-  # Trigger on any variable change
-  triggers = {
-    namespace = var.namespace_name
-  }
-}
+# No locking needed since there's only one producer
 
 # KMS key for encryption
 resource "aws_kms_key" "redshift" {
@@ -91,8 +79,6 @@ resource "aws_redshiftserverless_namespace" "producer" {
     Role        = "producer"
     Project     = var.project
   }
-  
-  depends_on = [null_resource.creation_controller]
 }
 
 # Redshift Serverless workgroup
@@ -117,19 +103,5 @@ resource "aws_redshiftserverless_workgroup" "producer" {
     Environment = var.environment
     Role        = "producer"
     Project     = var.project
-  }
-}
-
-# Wait for workgroup to be fully available before allowing consumers to start
-resource "null_resource" "wait_for_availability" {
-  depends_on = [aws_redshiftserverless_workgroup.producer]
-  
-  provisioner "local-exec" {
-    command = "${path.module}/wait_for_workgroup.sh '${var.namespace_name}-workgroup' '${var.namespace_name}'"
-  }
-  
-  # Trigger on workgroup changes
-  triggers = {
-    workgroup_id = aws_redshiftserverless_workgroup.producer.id
   }
 }

@@ -24,9 +24,10 @@ variable "consumer_endpoints" {
     address = string
     port    = number
   }))
+  default = []
 }
 
 variable "consumer_count" {
-  description = "Number of consumers (for determining attachment count)"
+  description = "Number of consumers for target group attachments"
   type        = number
 }

@@ -4,7 +4,7 @@
 resource "null_resource" "creation_controller" {
   # This ensures sequential creation using atomic lock operations
   provisioner "local-exec" {
-    command = "${path.module}/sequential_create.sh '${var.namespace_name}' '${var.workgroup_name}' '${var.consumer_index}'"
+    command = "${path.root}/scripts/deployment/sequential_create.sh '${var.namespace_name}' '${var.workgroup_name}' '${var.consumer_index}'"
   }
   
   # Trigger on any variable change
@@ -135,7 +135,7 @@ resource "null_resource" "wait_for_availability" {
   depends_on = [aws_redshiftserverless_workgroup.consumer]
   
   provisioner "local-exec" {
-    command = "${path.module}/wait_for_workgroup.sh '${var.workgroup_name}' '${var.namespace_name}'"
+    command = "${path.root}/scripts/deployment/wait_for_workgroup.sh '${var.workgroup_name}' '${var.namespace_name}'"
   }
   
   # Trigger on workgroup changes

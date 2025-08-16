@@ -1,0 +1,31 @@
+# Requirements for Python 3.13+ compatibility
+# psycopg2-binary 2.9.9 doesn't support Python 3.13 yet
+
+# ===== Core Dependencies =====
+psycopg[binary]==3.1.18  # Modern PostgreSQL/Redshift adapter (psycopg3)
+
+# ===== Monitoring Dependencies =====
+rich==13.7.0  # Rich terminal formatting
+
+# ===== AWS Dependencies (Optional) =====
+boto3==1.34.11
+botocore==1.34.11
+
+# ===== Development Tools (Optional) =====
+pytest==7.4.3
+pytest-cov==4.1.0
+black==23.12.1
+flake8==6.1.0
+mypy==1.8.0
+
+# ===== Data Analysis (Optional) =====
+pandas==2.1.4
+numpy==1.26.2
+matplotlib==3.8.2
+seaborn==0.13.0
+
+# ===== Utility Libraries (Optional) =====
+python-dotenv==1.0.0
+click==8.1.7
+tabulate==0.9.0
+colorama==0.4.6

@@ -1,0 +1,8 @@
+# Requirements for deployment monitor scripts only
+
+# For deploy-monitor.py (Python version with smooth animations)
+rich==13.7.0  # Rich terminal UI library for beautiful output
+boto3==1.34.11  # Optional - for direct AWS API calls instead of CLI
+
+# Note: The bash versions (deploy-monitor.sh, deploy-monitor-smooth.sh) 
+# don't require any Python dependencies
