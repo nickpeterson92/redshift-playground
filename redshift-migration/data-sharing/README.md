@@ -204,7 +204,23 @@ cp terraform.tfvars.example terraform.tfvars
 # - Set your IP address (get from: curl ifconfig.me)
 # - Set a secure password (no default - must be provided)
 # - Keep create_vpc = true (default)
+# - (Optional) Configure snapshot restoration if you have existing data
 ```
+
+#### Optional: Restore from Existing Snapshot
+
+If you have an existing Redshift snapshot with the airline_dw data:
+
+```hcl
+# In terraform.tfvars
+restore_from_snapshot = true
+snapshot_identifier   = "airline-data-snapshot"  # Your snapshot name
+```
+
+The system will automatically:
+- Detect if airline_dw schema already exists
+- Restore the snapshot to the producer namespace if needed
+- Configure data sharing once data is available
 
 ### 3. Deploy Infrastructure
 
@@ -451,9 +467,18 @@ Shows:
 
 ### Common Issues & Solutions
 
-1. **Data Sharing Not Configured**
+1. **Data Sharing Not Configured - No airline_dw Schema**
+   - **Cause**: Producer doesn't have the airline_dw schema (no snapshot restored)
    - **Check**: Run `terraform output datashare_setup_status`
-   - **Solution**: The setup runs automatically, but you can trigger manually:
+   - **Solutions**:
+     a. Restore from snapshot:
+     ```hcl
+     # In terraform.tfvars
+     restore_from_snapshot = true
+     snapshot_identifier   = "your-snapshot-name"
+     ```
+     b. Then run: `terraform apply`
+     c. Or manually restore via AWS Console and re-run setup:
      ```bash
      ./scripts/setup/run-setup.sh
      ```
@@ -503,6 +528,37 @@ psql -h <consumer-endpoint> -U awsuser -d consumer_db -c "SELECT * FROM svv_all_
 ```
 
 ## 🎯 Next Steps & Advanced Topics
+
+### Creating and Managing Snapshots
+
+#### Create a Snapshot from Traditional Cluster
+```bash
+# If you have a traditional Redshift cluster with data
+aws redshift create-cluster-snapshot \
+  --cluster-identifier your-cluster-name \
+  --snapshot-identifier airline-data-snapshot
+```
+
+#### Create a Snapshot from Serverless
+```bash
+# From an existing serverless namespace
+aws redshift-serverless create-snapshot \
+  --namespace-name airline-producer \
+  --snapshot-name airline-data-snapshot-v2
+```
+
+#### List Available Snapshots
+```bash
+# Traditional cluster snapshots
+aws redshift describe-cluster-snapshots \
+  --query 'Snapshots[*].[SnapshotIdentifier,Status,ClusterCreateTime]' \
+  --output table
+
+# Serverless snapshots
+aws redshift-serverless list-snapshots \
+  --query 'snapshots[*].[snapshotName,status,namespaceName]' \
+  --output table
+```
 
 ### Immediate Priorities
 1. **Monitoring & Observability**:

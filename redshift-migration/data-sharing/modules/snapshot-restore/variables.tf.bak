@@ -32,7 +32,7 @@ variable "master_username" {
 variable "master_password" {
   description = "Master password for database access"
   type        = string
-  sensitive   = true
+  sensitive   = false  # Temporarily disabled for debugging
 }
 
 variable "database_name" {
@@ -44,4 +44,22 @@ variable "database_name" {
 variable "aws_region" {
   description = "AWS region"
   type        = string
+}
+
+variable "restore_from_snapshot" {
+  description = "Whether to restore from an existing snapshot"
+  type        = bool
+  default     = false
+}
+
+variable "snapshot_identifier" {
+  description = "The identifier of the snapshot to restore"
+  type        = string
+  default     = ""
+}
+
+variable "force_restore" {
+  description = "Force re-restoration of snapshot"
+  type        = bool
+  default     = false
 }

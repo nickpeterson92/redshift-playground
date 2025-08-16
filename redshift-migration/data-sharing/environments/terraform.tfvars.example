@@ -1,0 +1,72 @@
+# ========================================
+# Environment Configuration Template
+# ========================================
+# Copy this file to your environment directory (dev/staging/prod)
+# and rename to terraform.tfvars, then update with your values
+
+# ========================================
+# Basic Configuration
+# ========================================
+aws_region      = "us-west-2"
+project_name    = "airline"
+environment     = "dev"                      # Change to: dev/staging/prod
+master_username = "admin"
+master_password = "YourSecurePassword123!"   # REQUIRED - Set a secure password!
+allowed_ip      = "YOUR.IP.ADDRESS.HERE/32"  # Get your IP: curl ifconfig.me
+
+# ========================================
+# Network Configuration
+# ========================================
+
+# Option 1: Create new VPC (DEFAULT - Standalone deployment)
+create_vpc     = true
+create_subnets = true
+vpc_name       = "redshift-vpc"
+vpc_cidr       = "10.0.0.0/16"
+subnet_cidrs   = ["10.0.0.0/23", "10.0.2.0/23", "10.0.4.0/23"]
+
+# Option 2: Use existing VPC (if you deployed traditional first)
+# create_vpc     = false
+# create_subnets = false
+# vpc_name       = "redshift-vpc"  # Name of existing VPC to look up
+
+# ========================================
+# Producer Configuration
+# ========================================
+producer_base_capacity = 32   # Minimum RPUs
+producer_max_capacity  = 256  # Maximum RPUs for auto-scaling
+
+# ========================================
+# Snapshot Restoration (Optional)
+# ========================================
+# If you have an existing Redshift snapshot with airline_dw data:
+restore_from_snapshot = false  # Set to true to restore from snapshot
+snapshot_identifier   = ""     # e.g., "airline-data-snapshot" or snapshot ARN
+# force_restore       = false  # Uncomment to force re-restore even if data exists
+
+# ========================================
+# Consumer Configuration
+# ========================================
+consumer_count         = 3   # Number of identical consumers for NLB
+consumer_base_capacity = 32  # Minimum RPUs per consumer (32 is minimum)
+consumer_max_capacity  = 128 # Maximum RPUs for auto-scaling
+
+# ========================================
+# Environment-Specific Recommendations
+# ========================================
+# Dev Environment:
+#   - consumer_count = 2 (minimize costs)
+#   - consumer_base_capacity = 32
+#   - consumer_max_capacity = 64
+#
+# Staging Environment:
+#   - consumer_count = 3 (test load balancing)
+#   - consumer_base_capacity = 32
+#   - consumer_max_capacity = 128
+#
+# Production Environment:
+#   - consumer_count = 3-5 (based on load)
+#   - consumer_base_capacity = 64
+#   - consumer_max_capacity = 256
+#
+# Note: All consumers must be identical for NLB load distribution

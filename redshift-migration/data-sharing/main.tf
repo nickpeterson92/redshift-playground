@@ -99,11 +99,10 @@ module "nlb" {
   depends_on = [module.consumers]
 }
 
-# Automated Data Sharing Setup
-# This module automatically configures data sharing between producer and consumers
-# It intelligently detects new consumers and only configures those that need setup
-module "datashare_setup" {
-  source = "./modules/datashare-setup"
+# Snapshot Restoration
+# This module restores a snapshot to the producer namespace after deployment
+module "snapshot_restore" {
+  source = "./modules/snapshot-restore"
   
   environment           = var.environment
   producer_endpoint     = try(module.producer.endpoint[0].address, "")
@@ -123,7 +122,12 @@ module "datashare_setup" {
   database_name   = var.database_name
   aws_region      = var.aws_region
   
-  # Ensure setup runs after all infrastructure is ready
+  # Snapshot restoration settings (if configured)
+  restore_from_snapshot = var.restore_from_snapshot
+  snapshot_identifier   = var.snapshot_identifier
+  force_restore         = var.force_restore
+  
+  # Ensure snapshot restore runs after ALL infrastructure is ready
   depends_on = [
     module.producer,
     module.consumers,

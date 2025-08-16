@@ -717,6 +717,15 @@ class CursesMonitor:
                         resources = self.resources.copy()
                         poll_indicator = self.poll_indicator
                         last_credential_refresh = self.last_credential_refresh
+                        
+                        # Detect teardown/deletion states
+                        teardown_mode = False
+                        if (resources.get('producer_status') in ['DELETING', 'DELETED'] or
+                            any(s in ['DELETING', 'DELETED'] for s in resources.get('consumer_statuses', {}).values()) or
+                            resources.get('nlb_state') == 'deleting' or
+                            resources.get('vpc_state') == 'deleting'):
+                            teardown_mode = True
+                            deployment_complete = False  # Override deployment complete during teardown
                 else:
                     # During fireworks, use cached values to avoid lock contention
                     pass
@@ -754,7 +763,12 @@ class CursesMonitor:
                 
                 # Show what's actually happening in the middle (with polling indicator)
                 in_progress_phases = [p['name'] for p in PHASES if phase_status[p['key']] == 'in_progress']
-                if in_progress_phases:
+                if teardown_mode:
+                    # Show teardown status
+                    stdscr.attron(curses.color_pair(1))  # Red for teardown
+                    stdscr.addstr(y, 30, "⚠ Tearing Down Resources...")
+                    stdscr.attroff(curses.color_pair(1))
+                elif in_progress_phases:
                     # Show active phases with polling indicator
                     status_text = f"{poll_ind} Active: {', '.join(in_progress_phases)}"
                     stdscr.attron(curses.color_pair(3))  # Yellow for in-progress
@@ -788,16 +802,44 @@ class CursesMonitor:
                     stdscr.attroff(curses.color_pair(1))
                 y += 2
                 
-                # Progress bar
-                completed = sum(1 for s in phase_status.values() if s == "complete")
-                pct = int((completed / len(PHASES)) * 100)
+                # Progress bar - adjust for teardown mode
+                if teardown_mode:
+                    # During teardown, count how many resources still exist
+                    existing_resources = 0
+                    total_resources = len(PHASES)
+                    
+                    # Count backwards - resources that are NOT deleted
+                    if resources.get('producer_status') not in ['DELETING', 'DELETED', None]:
+                        existing_resources += 2  # Producer namespace + workgroup
+                    if resources.get('consumer_statuses'):
+                        existing_resources += sum(1 for s in resources.get('consumer_statuses', {}).values() 
+                                                 if s not in ['DELETING', 'DELETED'])
+                    if resources.get('nlb_state') not in ['deleting', None]:
+                        existing_resources += 2  # NLB + targets
+                    if resources.get('vpc_id'):
+                        existing_resources += 2  # VPC + security groups
+                    
+                    # Calculate reverse progress
+                    pct = int((existing_resources / total_resources) * 100)
+                else:
+                    # Normal forward progress
+                    completed = sum(1 for s in phase_status.values() if s == "complete")
+                    pct = int((completed / len(PHASES)) * 100)
+                
                 bar_width = min(width - 20, 60)
                 filled = int((pct / 100) * bar_width)
                 
                 stdscr.addstr(y, 2, "Progress: [")
-                stdscr.attron(curses.color_pair(4))
-                stdscr.addstr("█" * filled)
-                stdscr.attroff(curses.color_pair(4))
+                if teardown_mode:
+                    # Red/orange bar for teardown
+                    stdscr.attron(curses.color_pair(1))
+                    stdscr.addstr("█" * filled)
+                    stdscr.attroff(curses.color_pair(1))
+                else:
+                    # Normal cyan bar for deployment
+                    stdscr.attron(curses.color_pair(4))
+                    stdscr.addstr("█" * filled)
+                    stdscr.attroff(curses.color_pair(4))
                 stdscr.addstr("░" * (bar_width - filled))
                 stdscr.addstr(f"] {pct}%")
                 y += 2
@@ -866,6 +908,10 @@ class CursesMonitor:
                                 stdscr.attron(curses.color_pair(2))
                                 stdscr.addstr(y + i, 45, f"Workgroup: ✓ {display_name}")
                                 stdscr.attroff(curses.color_pair(2))
+                            elif prod_status in ["DELETING", "DELETED"]:
+                                stdscr.attron(curses.color_pair(1))
+                                stdscr.addstr(y + i, 45, f"Workgroup: ○ {prod_status}")
+                                stdscr.attroff(curses.color_pair(1))
                             else:
                                 stdscr.attron(curses.color_pair(3))
                                 stdscr.addstr(y + i, 45, f"Workgroup: ⟳ {prod_status}")
@@ -966,10 +1012,80 @@ class CursesMonitor:
                 
                 y += len(PHASES) + 1
                 
+                # Data Sharing & Snapshot Status (tastefully placed above EKG)
+                if y < height - 4 and (self.phase_status.get('producer_workgroup') == 'complete' or 
+                                       self.phase_status.get('consumer_workgroups') == 'complete'):
+                    # Only show data sharing status if workgroups exist
+                    stdscr.addstr(y, 2, "DATA SHARING & SNAPSHOT")
+                    y += 1
+                    stdscr.addstr(y, 2, "─" * (width - 4))
+                    y += 1
+                    
+                    # Show snapshot status if relevant (check for snapshot-related resources)
+                    snapshot_info = resources.get('snapshot_info', None)
+                    if snapshot_info:
+                        # If we detect snapshot configuration
+                        stdscr.attron(curses.color_pair(3))
+                        stdscr.addstr(y, 2, "📸 Snapshot: Restoring airline data...")
+                        stdscr.attroff(curses.color_pair(3))
+                        y += 1
+                    
+                    # Determine data sharing status based on deployment phase
+                    datashare_status = resources.get('datashare_status', 'pending')
+                    
+                    # Simple status indicators based on deployment progress
+                    if deployment_complete:
+                        # If deployment is complete, assume data sharing is configured
+                        stdscr.attron(curses.color_pair(2))
+                        stdscr.addstr(y, 2, "✓ Data Sharing: Active")
+                        stdscr.attroff(curses.color_pair(2))
+                        
+                        # Show consumer access status in a compact way
+                        if self.consumer_count > 0:
+                            stdscr.addstr(y, 30, f"• {self.consumer_count} consumers → airline_shared database")
+                    elif (self.phase_status.get('health_checks') == 'complete' or 
+                          (self.phase_status.get('target_registration') == 'complete' and 
+                           resources.get('healthy_targets', 0) >= expected_targets)):
+                        # All infrastructure ready, data sharing can begin
+                        stdscr.attron(curses.color_pair(3))
+                        stdscr.addstr(y, 2, "⟳ Data Sharing: Configuring")
+                        stdscr.attroff(curses.color_pair(3))
+                        stdscr.addstr(y, 30, "• Creating datashare & granting access...")
+                    elif self.phase_status.get('nlb') == 'complete':
+                        # NLB ready, waiting for health checks
+                        stdscr.attron(curses.color_pair(5))
+                        stdscr.addstr(y, 2, "○ Data Sharing: Waiting")
+                        stdscr.attroff(curses.color_pair(5))
+                        stdscr.addstr(y, 30, "• Awaiting health checks to pass")
+                    elif self.phase_status.get('consumer_workgroups') == 'complete':
+                        # Workgroups ready, waiting for endpoints/NLB
+                        stdscr.attron(curses.color_pair(5))
+                        stdscr.addstr(y, 2, "○ Data Sharing: Waiting")
+                        stdscr.attroff(curses.color_pair(5))
+                        stdscr.addstr(y, 30, "• Awaiting VPC endpoints & load balancer")
+                    elif self.phase_status.get('producer_workgroup') == 'complete':
+                        # Producer ready, waiting for consumers
+                        stdscr.attron(curses.color_pair(5))
+                        stdscr.addstr(y, 2, "○ Data Sharing: Waiting")
+                        stdscr.attroff(curses.color_pair(5))
+                        stdscr.addstr(y, 30, "• Producer ready, consumers pending")
+                    else:
+                        # Not ready yet
+                        stdscr.attron(curses.color_pair(5))
+                        stdscr.addstr(y, 2, "○ Data Sharing: Pending")
+                        stdscr.attroff(curses.color_pair(5))
+                        stdscr.addstr(y, 30, "• Awaiting workgroup creation")
+                    
+                    y += 2
+                
                 # EKG at bottom
                 if y < height - 2:
                     self.draw_ekg(stdscr, height - 2, 3, min(width - 6, 40))
-                    if deployment_complete:
+                    if teardown_mode:
+                        stdscr.attron(curses.color_pair(1))
+                        stdscr.addstr(height - 2, 50, "Tearing down infrastructure...")
+                        stdscr.attroff(curses.color_pair(1))
+                    elif deployment_complete:
                         stdscr.attron(curses.color_pair(2) | curses.A_BOLD)
                         stdscr.addstr(height - 2, 50, "Deployment Complete! 🎉")
                         stdscr.attroff(curses.color_pair(2) | curses.A_BOLD)

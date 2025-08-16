@@ -1,0 +1,41 @@
+# ========================================
+# Backend Configuration Template
+# ========================================
+# Copy this file to your environment directory (dev/staging/prod)
+# and rename to backend-config.hcl, then update with your values
+#
+# This configures where Terraform stores its state file for the environment
+# The state file tracks all resources created by Terraform
+
+# S3 bucket for storing Terraform state
+# This should be created once using backend-setup/
+bucket = "your-terraform-state-bucket"  # Replace with your bucket name
+
+# Path within the bucket for this environment's state
+# Use a unique key for each environment to keep states separate
+key = "redshift-data-sharing/ENVIRONMENT/terraform.tfstate"  # Replace ENVIRONMENT
+
+# AWS region where the state bucket is located
+region = "us-west-2"
+
+# Enable encryption for state file (recommended)
+encrypt = true
+
+# DynamoDB table for state locking (prevents concurrent modifications)
+# This should be created once using backend-setup/
+dynamodb_table = "terraform-state-locks"  # Replace with your table name
+
+# ========================================
+# Environment-Specific Key Examples
+# ========================================
+# Development:
+#   key = "redshift-data-sharing/dev/terraform.tfstate"
+#
+# Staging:
+#   key = "redshift-data-sharing/staging/terraform.tfstate"
+#
+# Production:
+#   key = "redshift-data-sharing/prod/terraform.tfstate"
+#
+# IMPORTANT: Each environment must have a unique key to prevent
+# state file conflicts and accidental resource destruction

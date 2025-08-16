@@ -62,7 +62,7 @@ class WorkgroupMonitor:
                 'publiclyAccessible': False
             }
         
-        wg = details['workgroup']
+        wg = details.get('workgroup', {})
         endpoint = wg.get('endpoint', {}).get('address', 'N/A')
         
         # Calculate age
@@ -107,7 +107,7 @@ class WorkgroupMonitor:
         if not details or 'namespace' not in details:
             return {'status': 'NOT_FOUND', 'dbName': 'N/A', 'adminUsername': 'N/A'}
         
-        ns = details['namespace']
+        ns = details.get('namespace', {})
         return {
             'status': ns.get('status', 'UNKNOWN'),
             'dbName': ns.get('dbName', 'N/A'),
@@ -122,19 +122,20 @@ class WorkgroupMonitor:
         with self.state_lock:
             # Check for stuck workgroups
             for name, details in self.workgroups.items():
-                if details['status'] == 'MODIFYING' and details['age'] != 'N/A':
+                if details.get('status') == 'MODIFYING' and details.get('age', 'N/A') != 'N/A':
                     try:
                         # Parse age to check if > 10 minutes
-                        if 'm' in details['age']:
-                            minutes = int(details['age'].replace('m', ''))
+                        age = details.get('age', 'N/A')
+                        if 'm' in age:
+                            minutes = int(age.replace('m', ''))
                             if minutes > 10:
                                 issues.append(f"⚠️  {name} stuck in MODIFYING for {minutes}m")
-                        elif 'h' in details['age'] or 'd' in details['age']:
-                            issues.append(f"⚠️  {name} stuck in MODIFYING for {details['age']}")
+                        elif 'h' in age or 'd' in age:
+                            issues.append(f"⚠️  {name} stuck in MODIFYING for {age}")
                     except:
                         pass
                 
-                if details['status'] in ['ERROR', 'FAILED']:
+                if details.get('status') in ['ERROR', 'FAILED']:
                     issues.append(f"❌ {name} in ERROR state")
             
             self.issues = issues[:5]  # Keep only last 5 issues
@@ -233,7 +234,7 @@ class WorkgroupMonitor:
                 stdscr.attron(curses.A_REVERSE)
             
             # Status with color
-            status = details['status']
+            status = details.get('status', 'UNKNOWN')
             if status == 'AVAILABLE':
                 status_str = "✓ AVAILABLE"
                 color = curses.color_pair(2)  # Green
@@ -247,12 +248,12 @@ class WorkgroupMonitor:
                 status_str = f"✗ {status[:9]}"
                 color = curses.color_pair(1)  # Red
             
-            # Format row
+            # Format row - handle missing keys gracefully during teardown
             name_display = name[:25].ljust(25)
-            namespace = details['namespace'][:15].ljust(15)
-            capacity = f"{details['baseCapacity']:3d}" if details['baseCapacity'] else "  -"
-            age = details['age'][:5].ljust(5)
-            endpoint = details['endpoint'][:30] if details['endpoint'] != 'N/A' else '-'
+            namespace = details.get('namespace', 'N/A')[:15].ljust(15)
+            capacity = f"{details.get('baseCapacity', 0):3d}" if details.get('baseCapacity') else "  -"
+            age = details.get('age', 'N/A')[:5].ljust(5)
+            endpoint = details.get('endpoint', 'N/A')[:30] if details.get('endpoint', 'N/A') != 'N/A' else '-'
             
             # Draw row
             stdscr.addstr(y, 2, name_display)
@@ -289,16 +290,16 @@ class WorkgroupMonitor:
         
         # Details content
         y = start_y + 1
-        if details['endpoint'] != 'N/A':
-            stdscr.addstr(y, 4, f"Endpoint: {details['endpoint'][:width-15]}")
+        if details.get('endpoint', 'N/A') != 'N/A':
+            stdscr.addstr(y, 4, f"Endpoint: {details.get('endpoint', 'N/A')[:width-15]}")
             y += 1
         
-        if details['enhancedVpcRouting']:
+        if details.get('enhancedVpcRouting', False):
             stdscr.addstr(y, 4, "Enhanced VPC Routing: ✓")
             y += 1
         
-        if details['securityGroupIds']:
-            stdscr.addstr(y, 4, f"Security Groups: {', '.join(details['securityGroupIds'][:2])}")
+        if details.get('securityGroupIds'):
+            stdscr.addstr(y, 4, f"Security Groups: {', '.join(details.get('securityGroupIds', [])[:2])}")
             y += 1
         
         return y

@@ -100,3 +100,22 @@ variable "consumer_count" {
   type        = number
   default     = 3
 }
+
+# Snapshot Restoration Variables
+variable "restore_from_snapshot" {
+  description = "Whether to restore the producer from an existing Redshift snapshot"
+  type        = bool
+  default     = false
+}
+
+variable "snapshot_identifier" {
+  description = "The identifier of the Redshift snapshot to restore (e.g., 'airline-data-snapshot')"
+  type        = string
+  default     = ""
+}
+
+variable "force_restore" {
+  description = "Force re-restoration of snapshot even if data exists (useful for testing)"
+  type        = bool
+  default     = false
+}
