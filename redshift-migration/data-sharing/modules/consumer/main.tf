@@ -1,18 +1,5 @@
 # Consumer serverless workgroup module - handles read operations
-
-# Sequential creation controller with atomic locking
-resource "null_resource" "creation_controller" {
-  # This ensures sequential creation using atomic lock operations
-  provisioner "local-exec" {
-    command = "${path.root}/scripts/deployment/sequential_create.sh '${var.namespace_name}' '${var.workgroup_name}' '${var.consumer_index}'"
-  }
-  
-  # Trigger on any variable change
-  triggers = {
-    namespace = var.namespace_name
-    workgroup = var.workgroup_name
-  }
-}
+# No locking needed - AWS handles concurrent creation properly
 
 # IAM role for consumer
 resource "aws_iam_role" "consumer" {
@@ -37,7 +24,6 @@ resource "aws_iam_role" "consumer" {
     Type        = "generic-consumer"
   }
   
-  depends_on = [null_resource.creation_controller]
 }
 
 # Attach managed policy
@@ -86,7 +72,6 @@ resource "aws_redshiftserverless_namespace" "consumer" {
   }
   
   log_exports = [     "connectionlog",     "useractivitylog",     "userlog",   ]
-  depends_on = [null_resource.creation_controller]
 }
 
 # Serverless workgroup
@@ -100,7 +85,7 @@ resource "aws_redshiftserverless_workgroup" "consumer" {
   subnet_ids         = var.subnet_ids
   security_group_ids = [var.security_group_id]
   
-  publicly_accessible  = var.publicly_accessible
+  publicly_accessible  = false  # Not needed for NLB access
   enhanced_vpc_routing = true
 
   config_parameter {
@@ -130,16 +115,4 @@ resource "aws_redshiftserverless_workgroup" "consumer" {
   }
 }
 
-# Wait for workgroup to be fully available before allowing next consumer
-resource "null_resource" "wait_for_availability" {
-  depends_on = [aws_redshiftserverless_workgroup.consumer]
-  
-  provisioner "local-exec" {
-    command = "${path.root}/scripts/deployment/wait_for_workgroup.sh '${var.workgroup_name}' '${var.namespace_name}'"
-  }
-  
-  # Trigger on workgroup changes
-  triggers = {
-    workgroup_id = aws_redshiftserverless_workgroup.consumer.id
-  }
-}
+# No need to wait - AWS handles the orchestration

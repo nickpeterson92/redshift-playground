@@ -141,7 +141,7 @@ resource "aws_instance" "test" {
 
   # Copy test scripts to instance
   provisioner "file" {
-    source      = "../test-nlb.sh"
+    source      = "../scripts/testing/test-nlb.sh"
     destination = "/home/ec2-user/redshift-tests/test-nlb.sh"
     
     connection {
@@ -154,7 +154,7 @@ resource "aws_instance" "test" {
   }
 
   provisioner "file" {
-    source      = "../test-nlb-connection.py"
+    source      = "../scripts/testing/test-nlb-connection.py"
     destination = "/home/ec2-user/redshift-tests/test-nlb-connection.py"
     
     connection {

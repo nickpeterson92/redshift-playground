@@ -44,19 +44,10 @@ module "producer" {
   project     = var.project_name
 }
 
-# Generic consumer workgroups - all identical for NLB distribution
-locals {
-  consumer_count = var.consumer_count
-  
-  # All consumers use the same configuration
-  consumer_base_capacity = 32
-  consumer_max_capacity  = 128
-}
-
 # Create multiple generic consumer instances
 module "consumers" {
   source = "./modules/consumer"
-  count  = local.consumer_count
+  count  = var.consumer_count
 
   namespace_name = "${var.project_name}-consumer-${count.index + 1}"
   workgroup_name = "${var.project_name}-consumer-wg-${count.index + 1}"
@@ -65,8 +56,8 @@ module "consumers" {
   admin_password = var.master_password
   
   # All consumers have identical capacity for even load distribution
-  base_capacity = local.consumer_base_capacity
-  max_capacity  = local.consumer_max_capacity
+  base_capacity = var.consumer_base_capacity
+  max_capacity  = var.consumer_max_capacity
   
   vpc_id            = module.networking.vpc_id
   subnet_ids        = module.networking.subnet_ids

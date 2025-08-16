@@ -28,13 +28,13 @@ variable "admin_password" {
 variable "base_capacity" {
   description = "Base capacity in RPUs"
   type        = number
-  default     = 32
+  default     = 8
 }
 
 variable "max_capacity" {
   description = "Max capacity in RPUs"
   type        = number
-  default     = 128
+  default     = 32
 }
 
 variable "vpc_id" {

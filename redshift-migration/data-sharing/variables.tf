@@ -74,13 +74,25 @@ variable "allowed_ip" {
 variable "producer_base_capacity" {
   description = "Base capacity for producer workgroup in RPUs"
   type        = number
-  default     = 32
+  default     = 8
 }
 
 variable "producer_max_capacity" {
   description = "Maximum capacity for producer workgroup in RPUs"
   type        = number
-  default     = 256
+  default     = 128
+}
+
+variable "consumer_base_capacity" {
+  description = "Base capacity for consumer workgroups in RPUs"
+  type        = number
+  default     = 8
+}
+
+variable "consumer_max_capacity" {
+  description = "Maximum capacity for consumer workgroups in RPUs"
+  type        = number
+  default     = 32
 }
 
 variable "consumer_count" {

@@ -29,8 +29,8 @@ output "vpc_endpoint_name" {
 }
 
 output "vpc_endpoint_ips" {
-  description = "Private IPs from the VPC endpoint (via external data source)"
-  value = local.endpoint_ips
+  description = "VPC endpoint IPs are discovered dynamically by NLB script"
+  value = []  # No longer needed - NLB script discovers IPs directly
 }
 
 
@@ -46,5 +46,5 @@ output "iam_role_arn" {
 
 output "ready" {
   description = "Indicates workgroup is ready (used for dependencies)"
-  value       = null_resource.wait_for_availability.id
+  value       = aws_redshiftserverless_workgroup.consumer.id
 }

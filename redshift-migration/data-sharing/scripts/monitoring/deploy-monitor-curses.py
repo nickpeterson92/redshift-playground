@@ -12,6 +12,7 @@ import os
 import threading
 import random
 import math
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Dict, Any, List
@@ -39,8 +40,13 @@ class CursesMonitor:
         
         # Config
         self.project_name = os.environ.get('PROJECT_NAME', 'airline')
-        self.consumer_count = int(os.environ.get('CONSUMER_COUNT', '3'))
         self.aws_region = os.environ.get('AWS_REGION', 'us-west-2')
+        
+        # Dynamically determine consumer count
+        self.consumer_count = self._detect_consumer_count()
+        # Log what was detected (will be visible before curses starts)
+        if os.environ.get('DEBUG'):
+            print(f"Detected consumer_count: {self.consumer_count}")
         
         # State with thread safety
         self.state_lock = threading.Lock()
@@ -70,6 +76,62 @@ class CursesMonitor:
         # Background thread control
         self.stop_thread = threading.Event()
         
+    def _detect_consumer_count(self):
+        """Dynamically detect the number of consumers from various sources"""
+        # First, check if explicitly set via environment
+        if 'CONSUMER_COUNT' in os.environ:
+            return int(os.environ.get('CONSUMER_COUNT'))
+        
+        # Try to detect from terraform.tfvars if it exists
+        # Get the script's directory and work from there
+        script_dir = Path(__file__).parent.parent.parent  # Go up to data-sharing dir
+        tfvars_paths = [
+            'environments/dev/terraform.tfvars',  # From current directory
+            'terraform.tfvars',  # From current directory
+            script_dir / 'environments/dev/terraform.tfvars',  # Absolute path
+            Path.cwd() / 'environments/dev/terraform.tfvars',  # From working directory
+        ]
+        
+        for tfvars_path in tfvars_paths:
+            tfvars_path = Path(tfvars_path)  # Convert to Path object
+            if tfvars_path.exists():
+                try:
+                    with open(tfvars_path, 'r') as f:
+                        content = f.read()
+                        # Look for consumer_count = X pattern
+                        match = re.search(r'consumer_count\s*=\s*(\d+)', content)
+                        if match:
+                            count = int(match.group(1))
+                            # Debug logging if needed
+                            if os.environ.get('DEBUG'):
+                                print(f"Found consumer_count={count} in {tfvars_path}")
+                            return count
+                except Exception as e:
+                    # Log error for debugging but continue
+                    if os.environ.get('DEBUG'):
+                        print(f"Error reading {tfvars_path}: {e}")
+                    pass
+        
+        # Try to detect from AWS - count existing or planned consumer workgroups
+        try:
+            result = subprocess.run(
+                ["aws", "redshift-serverless", "list-workgroups",
+                 "--query", f"length(workgroups[?contains(workgroupName, '{self.project_name}-consumer')])",
+                 "--output", "text"],
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                existing_count = int(result.stdout.strip())
+                if existing_count > 0:
+                    return existing_count
+        except:
+            pass
+        
+        # Default to 3 if we can't detect
+        return 3
+    
     def _set_phase_status_unsafe(self, phase_key: str, status: str):
         """Set phase status with sticky complete logic - must be called with lock held"""
         # If already marked complete and sticky, don't change it
@@ -323,8 +385,9 @@ class CursesMonitor:
                                 with self.state_lock:
                                     self.resources["healthy_targets"] = healthy
                                 
-                                # Check if all targets are healthy
-                                if healthy >= self.consumer_count:
+                                # Check if all targets are healthy (3 per consumer for multi-AZ)
+                                expected_targets = self.consumer_count * 3
+                                if healthy >= expected_targets:
                                     self.set_phase_status("targets", "complete")
                                     self.set_phase_status("health", "complete")
                                     with self.state_lock:
@@ -365,27 +428,44 @@ class CursesMonitor:
             self.stop_thread.wait(2)
     
     def draw_ekg(self, win, y, x, width):
-        """Draw smooth EKG animation"""
+        """Draw smooth EKG animation - athletic 60 bpm resting heart rate"""
         ekg_line = "━" * width
         
-        # Create pulse at position
-        if self.ekg_position < width - 2:
+        # Heart beat controls the rhythm 
+        # 60 bpm = 60 beats/60 seconds = 1 beat/second
+        # At 60 FPS, that's exactly 60 frames per beat - perfect!
+        beat_cycle = 60
+        self.heart_beat = (self.heart_beat + 1) % beat_cycle
+        
+        # When heart beats strongest (frame 0), trigger a new EKG wave
+        if self.heart_beat == 0:
+            self.ekg_position = 0  # Start new wave from left
+        
+        # Create pulse at position (only if we're in a heartbeat cycle)
+        if self.ekg_position < width - 2 and self.heart_beat < 45:  # Wave travels during heartbeat
             ekg_line = ekg_line[:self.ekg_position] + "╱╲" + ekg_line[self.ekg_position+2:]
+            # Move the wave across the screen (nice and steady for athlete's heart)
+            if self.heart_beat % 2 == 0:  # Move every other frame
+                self.ekg_position = min(self.ekg_position + 2, width)
         
         # Draw with color
         win.attron(curses.color_pair(2))  # Green
         win.addstr(y, x, f"[{ekg_line[:width-2]}]")
         win.attroff(curses.color_pair(2))
         
-        # Update position for next frame
-        self.ekg_position = (self.ekg_position + 1) % (width + 10)
+        # Heart animation - strong and efficient like an athlete
+        if self.heart_beat < 10:  # Strong beat (triggers wave) - powerful but brief
+            heart = "♥"
+            win.attron(curses.color_pair(1) | curses.A_BOLD)  # Bright red
+        elif self.heart_beat < 40:  # Normal beat - steady and strong
+            heart = "♥"
+            win.attron(curses.color_pair(1))  # Red
+        else:  # Resting (last 20 frames) - good recovery time
+            heart = "♡"
+            win.attron(curses.color_pair(1))  # Red but hollow
         
-        # Heart beat
-        heart = "♥" if self.heart_beat < 20 else "♡"
-        win.attron(curses.color_pair(1))  # Red
         win.addstr(y, x-2, heart)
-        win.attroff(curses.color_pair(1))
-        self.heart_beat = (self.heart_beat + 1) % 30
+        win.attroff(curses.color_pair(1) | curses.A_BOLD)
     
     def create_firework(self, x, y):
         """Create a simple firework burst at position"""
@@ -564,7 +644,7 @@ class CursesMonitor:
                 seconds = int(elapsed.total_seconds() % 60)
                 current_phase = PHASES[current_phase_index]
                 
-                stdscr.addstr(y, 2, f"◷ Elapsed: {minutes:3d}m {seconds:02d}s")
+                stdscr.addstr(y, 2, f"◷ Elapsed: {minutes:3d}m {seconds:02d}s   🎯 Target: {self.consumer_count} consumers")
                 
                 # Show what's actually happening
                 in_progress_phases = [p['name'] for p in PHASES if phase_status[p['key']] == 'in_progress']
@@ -647,7 +727,9 @@ class CursesMonitor:
                     elif i == 4:
                         stdscr.addstr(y + i, 45, f"NLB: {'✓ Active' if resources['nlb'] else '○ Pending'}")
                     elif i == 5:
-                        stdscr.addstr(y + i, 45, f"Targets: {resources['healthy_targets']}/{self.consumer_count}")
+                        # Each consumer has 3 IPs (one per AZ), so total targets = consumers * 3
+                        expected_targets = self.consumer_count * 3
+                        stdscr.addstr(y + i, 45, f"Targets: {resources['healthy_targets']}/{expected_targets}")
                 
                 y += len(PHASES) + 1
                 

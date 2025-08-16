@@ -23,13 +23,13 @@ variable "master_password" {
 variable "base_capacity" {
   description = "Base capacity for the workgroup in RPUs"
   type        = number
-  default     = 32
+  default     = 8
 }
 
 variable "max_capacity" {
   description = "Maximum capacity for the workgroup in RPUs"
   type        = number
-  default     = 512
+  default     = 128
 }
 
 variable "vpc_id" {

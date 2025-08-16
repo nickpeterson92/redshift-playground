@@ -59,12 +59,8 @@ if [ -n "$NAMESPACE1" ]; then
     echo -e "${GREEN}✅ Instance 1 connected to namespace:${NC}"
     echo "   $NAMESPACE1"
     
-    # Determine which consumer this is
-    if [[ "$NAMESPACE1" == *"8cfa12a1"* ]]; then
-        CONSUMER1="Consumer-1"
-    else
-        CONSUMER1="Consumer-2"
-    fi
+    # Use namespace ID to identify consumer (first 8 chars for readability)
+    CONSUMER1="Consumer (${NAMESPACE1:0:8}...)"
     echo -e "   ${YELLOW}→ Routed to: $CONSUMER1${NC}"
 else
     echo -e "${RED}❌ Failed to connect from Instance 1${NC}"
@@ -83,12 +79,8 @@ if [ -n "$NAMESPACE2" ]; then
     echo -e "${GREEN}✅ Instance 2 connected to namespace:${NC}"
     echo "   $NAMESPACE2"
     
-    # Determine which consumer this is
-    if [[ "$NAMESPACE2" == *"8cfa12a1"* ]]; then
-        CONSUMER2="Consumer-1"
-    else
-        CONSUMER2="Consumer-2"
-    fi
+    # Use namespace ID to identify consumer (first 8 chars for readability)
+    CONSUMER2="Consumer (${NAMESPACE2:0:8}...)"
     echo -e "   ${YELLOW}→ Routed to: $CONSUMER2${NC}"
 else
     echo -e "${RED}❌ Failed to connect from Instance 2${NC}"

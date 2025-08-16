@@ -15,10 +15,17 @@ echo -e "${GREEN}🔄 Testing Redshift NLB Connection${NC}"
 echo "=================================="
 
 # Get NLB endpoint from Terraform
+# Try current directory first, then parent directory
 NLB_ENDPOINT=$(terraform output -raw nlb_endpoint 2>/dev/null || echo "")
 
 if [ -z "$NLB_ENDPOINT" ]; then
+    # Try parent directory (main deployment)
+    NLB_ENDPOINT=$(cd .. && terraform output -raw nlb_endpoint 2>/dev/null || echo "")
+fi
+
+if [ -z "$NLB_ENDPOINT" ]; then
     echo -e "${RED}❌ Could not get NLB endpoint from Terraform outputs${NC}"
+    echo "Make sure the main infrastructure is deployed first"
     exit 1
 fi
 
