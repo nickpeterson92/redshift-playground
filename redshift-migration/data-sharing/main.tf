@@ -76,10 +76,10 @@ module "consumers" {
 module "nlb" {
   source = "./modules/nlb"
   
-  project_name = var.project_name
-  environment  = var.environment
-  vpc_id       = module.networking.vpc_id
-  subnet_ids   = module.networking.subnet_ids
+  project_name   = var.project_name
+  environment    = var.environment
+  vpc_id         = module.networking.vpc_id
+  subnet_ids     = module.networking.subnet_ids
   consumer_count = var.consumer_count
   
   # Create endpoint list using stable VPC endpoint IPs for NLB
@@ -97,4 +97,36 @@ module "nlb" {
   )
   
   depends_on = [module.consumers]
+}
+
+# Automated Data Sharing Setup
+# This module automatically configures data sharing between producer and consumers
+# It intelligently detects new consumers and only configures those that need setup
+module "datashare_setup" {
+  source = "./modules/datashare-setup"
+  
+  environment           = var.environment
+  producer_endpoint     = try(module.producer.endpoint[0].address, "")
+  producer_namespace_id = module.producer.namespace_id
+  
+  # Create consumer configuration map
+  consumer_configs = {
+    for idx, consumer in module.consumers : 
+    "consumer-${idx}" => {
+      namespace_id = consumer.namespace_id
+      endpoint     = try(consumer.endpoint[0].address, "")
+    }
+  }
+  
+  master_username = var.master_username
+  master_password = var.master_password
+  database_name   = var.database_name
+  aws_region      = var.aws_region
+  
+  # Ensure setup runs after all infrastructure is ready
+  depends_on = [
+    module.producer,
+    module.consumers,
+    module.nlb
+  ]
 }

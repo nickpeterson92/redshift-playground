@@ -122,7 +122,7 @@ aws_region      = "us-west-2"
 project_name    = "airline"
 environment     = "dev"
 master_username = "admin"
-master_password = "Password123"  # Change this!
+master_password = "YourSecurePassword123!"  # REQUIRED - no default, must be set!
 allowed_ip      = "YOUR.IP.HERE/32"
 consumer_count  = 2  # Number of consumer workgroups
 ```
@@ -144,7 +144,7 @@ locals {
 
 ```bash
 # From test-instance directory
-export REDSHIFT_PASSWORD='Password123'
+export REDSHIFT_PASSWORD='YourActualPassword'  # Use the password from terraform.tfvars
 ./run-remote-test.sh         # Quick connectivity test
 ./run-remote-test.sh python  # Load distribution test
 ./test-load-balancing.sh     # Test from both EC2 instances

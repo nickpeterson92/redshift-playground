@@ -61,20 +61,33 @@ class CursesMonitor:
         # Resources
         self.resources = {
             "vpc": None,
+            "vpc_cidr": None,
             "subnets": [],
+            "subnet_azs": [],  # Track availability zones
             "producer_workgroup": None,
+            "producer_status": None,
             "consumer_workgroups": [],
+            "consumer_statuses": {},  # Track individual workgroup statuses
             "nlb": None,
+            "nlb_dns": None,
+            "nlb_state": None,
+            "target_group_arn": None,
             "healthy_targets": 0,
+            "total_targets": 0,
+            "target_states": {},  # Track individual target states
+            "vpc_endpoints": [],  # Track endpoint details
+            "endpoint_statuses": {},  # Track endpoint statuses
         }
-        
-        # Lock status
-        self.lock_status = "Unknown"
-        self.lock_owner = None
-        self.lock_workgroup = None
         
         # Background thread control
         self.stop_thread = threading.Event()
+        self.last_poll_time = datetime.now()
+        self.poll_indicator = 0
+        self.animation_frame = 0  # For smooth animations independent of polling
+        
+        # AWS credential refresh
+        self.last_credential_refresh = datetime.now()
+        self.credential_refresh_interval = 55 * 60  # 55 minutes in seconds
         
     def _detect_consumer_count(self):
         """Dynamically detect the number of consumers from various sources"""
@@ -150,24 +163,26 @@ class CursesMonitor:
         with self.state_lock:
             self._set_phase_status_unsafe(phase_key, status)
     
-    def check_lock_status(self):
-        """Check atomic lock status"""
-        lock_dir = Path("/tmp/redshift-consumer-lock.d/lock")
+    
+    def refresh_aws_credentials(self):
+        """Refresh AWS credentials using aws-azure-login"""
         try:
-            if lock_dir.exists():
-                owner = (lock_dir / "owner").read_text().strip()
-                workgroup = (lock_dir / "workgroup").read_text().strip()
-                with self.state_lock:
-                    self.lock_status = "LOCKED"
-                    self.lock_owner = owner
-                    self.lock_workgroup = workgroup
-            else:
-                with self.state_lock:
-                    self.lock_status = "Available"
-                    self.lock_owner = None
-                    self.lock_workgroup = None
-        except:
-            pass
+            # Fire and forget - don't wait for completion
+            subprocess.Popen(
+                ["aws-azure-login", "--no-prompt"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                stdin=subprocess.DEVNULL
+            )
+            with self.state_lock:
+                self.last_credential_refresh = datetime.now()
+            # Log the refresh if debug mode
+            if os.environ.get('DEBUG'):
+                print(f"[{datetime.now().strftime('%H:%M:%S')}] AWS credentials refreshed", file=sys.stderr)
+        except Exception as e:
+            # Silently fail - don't interrupt monitoring
+            if os.environ.get('DEBUG'):
+                print(f"[{datetime.now().strftime('%H:%M:%S')}] Failed to refresh credentials: {e}", file=sys.stderr)
     
     def run_aws_command(self, service: str, command: str, query: str = None) -> Any:
         """Run AWS CLI command"""
@@ -186,7 +201,11 @@ class CursesMonitor:
     
     def update_deployment_status(self):
         """Update deployment status in background"""
-        self.check_lock_status()
+        # Update poll indicator (only if not complete)
+        with self.state_lock:
+            self.last_poll_time = datetime.now()
+            if not self.deployment_complete:
+                self.poll_indicator = (self.poll_indicator + 1) % 4
         
         # Check VPC - but don't flip back to pending if we already marked it complete
         with self.state_lock:
@@ -196,24 +215,28 @@ class CursesMonitor:
             # Only check VPC if we haven't already confirmed it exists
             vpcs = self.run_aws_command(
                 "ec2", "describe-vpcs",
-                f"Vpcs[?Tags[?Key=='Name' && contains(Value, '{self.project_name}')]].[VpcId]"
+                f"Vpcs[?Tags[?Key=='Name' && contains(Value, '{self.project_name}')]].[VpcId,CidrBlock]"
             )
             
             if vpcs and len(vpcs) > 0:
+                vpc_id = vpcs[0][0]
+                vpc_cidr = vpcs[0][1] if len(vpcs[0]) > 1 else None
+                
                 with self.state_lock:
-                    self.resources["vpc"] = vpcs[0][0]
+                    self.resources["vpc"] = vpc_id
+                    self.resources["vpc_cidr"] = vpc_cidr
                 self.set_phase_status("networking", "complete")
                 self.set_phase_status("security", "complete")
                 
-                # Get project-specific subnets
-                vpc_id = vpcs[0][0]
+                # Get project-specific subnets with AZ info
                 subnets = self.run_aws_command(
                     "ec2", "describe-subnets",
-                    f"Subnets[?VpcId=='{vpc_id}'].[SubnetId]"
+                    f"Subnets[?VpcId=='{vpc_id}'].[SubnetId,AvailabilityZone,CidrBlock]"
                 )
                 if subnets:
                     with self.state_lock:
                         self.resources["subnets"] = [s[0] for s in subnets[:3]]
+                        self.resources["subnet_azs"] = [s[1] for s in subnets[:3] if len(s) > 1]
         
         # Check workgroups
         workgroups = self.run_aws_command(
@@ -231,18 +254,26 @@ class CursesMonitor:
                 
                 # Clear resources first to rebuild accurately
                 self.resources["consumer_workgroups"] = []
+                self.resources["consumer_statuses"] = {}
                 self.resources["producer_workgroup"] = None
+                self.resources["producer_status"] = None
                 
                 for wg_name, status in workgroups:
-                    if status == "AVAILABLE":
-                        total_available += 1
-                        # Properly categorize workgroups
+                    # Only count project-related workgroups
+                    if self.project_name in wg_name:
                         if 'producer' in wg_name.lower():
                             self.resources["producer_workgroup"] = wg_name
+                            self.resources["producer_status"] = status
                         else:
-                            self.resources["consumer_workgroups"].append(wg_name)
-                    elif status in ["CREATING", "MODIFYING"]:
-                        total_creating += 1
+                            if status == "AVAILABLE":
+                                self.resources["consumer_workgroups"].append(wg_name)
+                            self.resources["consumer_statuses"][wg_name] = status
+                        
+                        # Count status for project workgroups only
+                        if status == "AVAILABLE":
+                            total_available += 1
+                        elif status in ["CREATING", "MODIFYING"]:
+                            total_creating += 1
                 
                 # Track workgroup completion status
                 expected_total = self.consumer_count + 1  # consumers + producer
@@ -301,18 +332,31 @@ class CursesMonitor:
         if self.phase_status["consumer_workgroups"] == "complete":
             endpoints = self.run_aws_command(
                 "redshift-serverless", "list-endpoint-access",
-                "endpoints[*].[endpointName,endpointStatus]"
+                "endpoints[*].[endpointName,endpointStatus,address]"
             )
             
             if endpoints:
                 with self.state_lock:
                     active_endpoints = 0
                     creating_endpoints = 0
-                    for ep_name, status in endpoints:
+                    self.resources["vpc_endpoints"] = []
+                    self.resources["endpoint_statuses"] = {}
+                    
+                    for endpoint_data in endpoints:
+                        ep_name = endpoint_data[0] if len(endpoint_data) > 0 else None
+                        status = endpoint_data[1] if len(endpoint_data) > 1 else None
+                        address = endpoint_data[2] if len(endpoint_data) > 2 else None
+                        
                         # Only count project-related endpoints
-                        if self.project_name in ep_name:
+                        if ep_name and self.project_name in ep_name:
+                            self.resources["endpoint_statuses"][ep_name] = {
+                                "status": status,
+                                "address": address
+                            }
+                            
                             if status == "ACTIVE":
                                 active_endpoints += 1
+                                self.resources["vpc_endpoints"].append(ep_name)
                             elif status == "CREATING":
                                 creating_endpoints += 1
                     
@@ -332,19 +376,24 @@ class CursesMonitor:
             # Try exact name first, then contains
             nlbs = self.run_aws_command(
                 "elbv2", "describe-load-balancers",
-                f"LoadBalancers[?LoadBalancerName=='{self.project_name}-redshift-nlb'].[State.Code]"
+                f"LoadBalancers[?LoadBalancerName=='{self.project_name}-redshift-nlb'].[State.Code,DNSName]"
             )
             
             if not nlbs:
                 # Fallback to contains search
                 nlbs = self.run_aws_command(
                     "elbv2", "describe-load-balancers",
-                    f"LoadBalancers[?contains(LoadBalancerName, '{self.project_name}')].[State.Code]"
+                    f"LoadBalancers[?contains(LoadBalancerName, '{self.project_name}')].[State.Code,DNSName]"
                 )
             
             if nlbs and len(nlbs) > 0:
                 nlb_state = nlbs[0][0]
+                nlb_dns = nlbs[0][1] if len(nlbs[0]) > 1 else None
+                
                 with self.state_lock:
+                    self.resources["nlb_state"] = nlb_state
+                    self.resources["nlb_dns"] = nlb_dns
+                    
                     if nlb_state == "active":
                         self.resources["nlb"] = "active"
                         self._set_phase_status_unsafe("nlb", "complete")
@@ -379,11 +428,28 @@ class CursesMonitor:
                             health = json.loads(health_result.stdout)
                             if "TargetHealthDescriptions" in health:
                                 targets = health["TargetHealthDescriptions"]
-                                healthy = sum(1 for t in targets if t.get("TargetHealth", {}).get("State") == "healthy")
+                                
+                                # Count target states for more granular feedback
+                                state_counts = {
+                                    "healthy": 0,
+                                    "initial": 0,
+                                    "unhealthy": 0,
+                                    "draining": 0,
+                                    "unavailable": 0
+                                }
+                                
+                                for t in targets:
+                                    state = t.get("TargetHealth", {}).get("State", "unknown")
+                                    state_counts[state] = state_counts.get(state, 0) + 1
+                                
+                                healthy = state_counts["healthy"]
+                                initial = state_counts["initial"]
                                 total = len(targets)
                                 
                                 with self.state_lock:
                                     self.resources["healthy_targets"] = healthy
+                                    self.resources["total_targets"] = total
+                                    self.resources["target_states"] = state_counts
                                 
                                 # Check if all targets are healthy (3 per consumer for multi-AZ)
                                 expected_targets = self.consumer_count * 3
@@ -393,8 +459,9 @@ class CursesMonitor:
                                     with self.state_lock:
                                         self.deployment_complete = True
                                 elif total > 0:
+                                    # Targets are registering or health checking
                                     self.set_phase_status("targets", "in_progress")
-                                    if healthy > 0:
+                                    if healthy > 0 or initial > 0:
                                         self.set_phase_status("health", "in_progress")
                         except:
                             pass
@@ -424,8 +491,32 @@ class CursesMonitor:
     def background_updater(self):
         """Background thread for AWS updates"""
         while not self.stop_thread.is_set():
+            # Check if we need to refresh AWS credentials
+            elapsed_since_refresh = (datetime.now() - self.last_credential_refresh).total_seconds()
+            if elapsed_since_refresh >= self.credential_refresh_interval:
+                # Refresh credentials in background
+                self.refresh_aws_credentials()
+            
+            # Update deployment status
             self.update_deployment_status()
-            self.stop_thread.wait(2)
+            
+            # Adaptive polling - faster during critical phases
+            with self.state_lock:
+                # If deployment is complete, slow down polling significantly
+                if self.deployment_complete:
+                    poll_interval = 10  # Very slow polling when complete
+                # Poll faster during target registration and health checks
+                elif self.phase_status.get("targets") == "in_progress" or \
+                     self.phase_status.get("health") == "in_progress":
+                    poll_interval = 1  # Poll every second during target registration
+                elif self.phase_status.get("nlb") == "in_progress":
+                    poll_interval = 1.5  # Slightly faster for NLB provisioning
+                elif any(status == "in_progress" for status in self.phase_status.values()):
+                    poll_interval = 2  # Standard polling for other phases
+                else:
+                    poll_interval = 3  # Slower when nothing is happening
+            
+            self.stop_thread.wait(poll_interval)
     
     def draw_ekg(self, win, y, x, width):
         """Draw smooth EKG animation - athletic 60 bpm resting heart rate"""
@@ -610,6 +701,9 @@ class CursesMonitor:
             while True:
                 height, width = stdscr.getmaxyx()
                 
+                # Update animation frame for smooth animations
+                self.animation_frame = (self.animation_frame + 1) % 240  # Reset every 4 seconds at 60fps
+                
                 # Only do full redraw if not showing fireworks
                 if not fireworks_active:
                     stdscr.erase()  # More gentle than clear, preserves terminal state
@@ -620,10 +714,9 @@ class CursesMonitor:
                         phase_status = self.phase_status.copy()
                         current_phase_index = self.current_phase_index
                         deployment_complete = self.deployment_complete
-                        lock_status = self.lock_status
-                        lock_owner = self.lock_owner
-                        lock_workgroup = self.lock_workgroup
                         resources = self.resources.copy()
+                        poll_indicator = self.poll_indicator
+                        last_credential_refresh = self.last_credential_refresh
                 else:
                     # During fireworks, use cached values to avoid lock contention
                     pass
@@ -644,34 +737,55 @@ class CursesMonitor:
                 seconds = int(elapsed.total_seconds() % 60)
                 current_phase = PHASES[current_phase_index]
                 
-                stdscr.addstr(y, 2, f"◷ Elapsed: {minutes:3d}m {seconds:02d}s   🎯 Target: {self.consumer_count} consumers")
+                # Show polling indicator - animate smoothly based on frame, not polling
+                # More frames for smoother animation
+                poll_indicators = ["⣾", "⣷", "⣯", "⣟", "⡿", "⢿", "⣻", "⣽"]
+                # Update every 8 frames (~7.5 times per second) for relaxed but visible animation
+                poll_frame = (self.animation_frame // 8) % len(poll_indicators)
+                poll_ind = poll_indicators[poll_frame] if not deployment_complete else ""
                 
-                # Show what's actually happening
+                # Calculate time until next credential refresh
+                cred_elapsed = (datetime.now() - last_credential_refresh).total_seconds()
+                cred_remaining = max(0, (55 * 60) - cred_elapsed) / 60  # in minutes
+                
+                # Build the status line without overlapping elements
+                status_line = f"◷ Elapsed: {minutes:3d}m {seconds:02d}s"
+                stdscr.addstr(y, 2, status_line)
+                
+                # Show what's actually happening in the middle (with polling indicator)
                 in_progress_phases = [p['name'] for p in PHASES if phase_status[p['key']] == 'in_progress']
                 if in_progress_phases:
-                    stdscr.addstr(y, 25, "▶ Active: ")
+                    # Show active phases with polling indicator
+                    status_text = f"{poll_ind} Active: {', '.join(in_progress_phases)}"
                     stdscr.attron(curses.color_pair(3))  # Yellow for in-progress
-                    stdscr.addstr(', '.join(in_progress_phases))
+                    stdscr.addstr(y, 30, status_text[:width-55])  # Truncate if too long
                     stdscr.attroff(curses.color_pair(3))
                 elif deployment_complete:
+                    # No polling indicator when complete
                     stdscr.attron(curses.color_pair(2))  # Green
-                    stdscr.addstr(y, 25, "✓ All Phases Complete!")
+                    stdscr.addstr(y, 30, "✓ All Phases Complete!")
                     stdscr.attroff(curses.color_pair(2))
                 else:
-                    stdscr.addstr(y, 25, f"▶ Waiting: {current_phase['name']}")
-                y += 2
+                    # Show waiting status with gentle pulsing dots
+                    # Use dots animation for "searching" feel - slower and more relaxed
+                    dots = "." * ((self.animation_frame // 20) % 4)  # Update every ~third of a second
+                    spaces = "   "  # Add padding so text doesn't jump around
+                    status_text = f"{poll_ind} Waiting: {current_phase['name']}{dots}{spaces}"
+                    stdscr.addstr(y, 30, status_text[:width-55])
                 
-                # Lock status
-                if lock_status == "LOCKED":
-                    stdscr.attron(curses.color_pair(3))
-                    stdscr.addstr(y, 2, f"🔒 LOCK: HELD BY {lock_owner} (creating {lock_workgroup})")
-                    stdscr.attroff(curses.color_pair(3))
-                elif lock_status == "Available":
+                # Show credential refresh status on the right
+                if cred_remaining > 10:
                     stdscr.attron(curses.color_pair(2))
-                    stdscr.addstr(y, 2, "🔓 LOCK: AVAILABLE")
+                    stdscr.addstr(y, width - 15, f"🔑 AWS: {int(cred_remaining)}m")
                     stdscr.attroff(curses.color_pair(2))
+                elif cred_remaining > 0:
+                    stdscr.attron(curses.color_pair(3))
+                    stdscr.addstr(y, width - 20, f"🔑 AWS: {int(cred_remaining)}m ⟳")
+                    stdscr.attroff(curses.color_pair(3))
                 else:
-                    stdscr.addstr(y, 2, f"🔐 LOCK: {lock_status}")
+                    stdscr.attron(curses.color_pair(1))
+                    stdscr.addstr(y, width - 22, "🔑 AWS: Refreshing...")
+                    stdscr.attroff(curses.color_pair(1))
                 y += 2
                 
                 # Progress bar
@@ -690,7 +804,7 @@ class CursesMonitor:
                 
                 # Phases
                 stdscr.addstr(y, 2, "DEPLOYMENT PHASES")
-                stdscr.addstr(y, 45, "RESOURCES")
+                stdscr.addstr(y, 45, "RESOURCE DETAILS")
                 y += 1
                 stdscr.addstr(y, 2, "─" * (width - 4))
                 y += 1
@@ -717,19 +831,138 @@ class CursesMonitor:
                         stdscr.addstr(y + i, 4, f" {phase['name']}")
                         stdscr.attroff(curses.color_pair(5))
                     
-                    # Resources column
-                    if i == 0:
-                        stdscr.addstr(y + i, 45, f"VPC: {'✓' if resources['vpc'] else '○'}")
-                    elif i == 2:
-                        stdscr.addstr(y + i, 45, f"Producer: {'✓' if resources['producer_workgroup'] else '○'}")
-                    elif i == 3:
-                        stdscr.addstr(y + i, 45, f"Consumers: {len(resources['consumer_workgroups'])}/{self.consumer_count}")
-                    elif i == 4:
-                        stdscr.addstr(y + i, 45, f"NLB: {'✓ Active' if resources['nlb'] else '○ Pending'}")
-                    elif i == 5:
+                    # Resources column with more details
+                    if i == 0:  # VPC & Networking
+                        if resources.get('vpc'):
+                            vpc_info = f"VPC: {resources['vpc'][-12:]}"
+                            if resources.get('vpc_cidr'):
+                                vpc_info += f" ({resources['vpc_cidr']})"
+                            stdscr.addstr(y + i, 45, vpc_info[:35])
+                        else:
+                            stdscr.addstr(y + i, 45, "VPC: ○ Pending")
+                    elif i == 1:  # Security Groups
+                        if resources.get('subnet_azs'):
+                            azs = ', '.join(resources['subnet_azs'])
+                            stdscr.addstr(y + i, 45, f"AZs: {azs[:30]}")
+                    elif i == 2:  # Producer namespace
+                        # Show namespace info - namespaces are created before workgroups
+                        if phase_status.get('producer_namespace') == 'complete':
+                            stdscr.attron(curses.color_pair(2))
+                            stdscr.addstr(y + i, 45, f"Namespace: ✓ {self.project_name}-producer-ns")
+                            stdscr.attroff(curses.color_pair(2))
+                        else:
+                            stdscr.addstr(y + i, 45, "Namespace: ○ Pending")
+                    elif i == 3:  # Producer workgroup
+                        if resources.get('producer_workgroup'):
+                            prod_status = resources.get('producer_status', 'Unknown')
+                            wg_name = resources['producer_workgroup']
+                            # Show full workgroup name if it fits, otherwise truncate from beginning
+                            if len(wg_name) <= 30:
+                                display_name = wg_name
+                            else:
+                                display_name = "..." + wg_name[-27:]
+                            
+                            if prod_status == "AVAILABLE":
+                                stdscr.attron(curses.color_pair(2))
+                                stdscr.addstr(y + i, 45, f"Workgroup: ✓ {display_name}")
+                                stdscr.attroff(curses.color_pair(2))
+                            else:
+                                stdscr.attron(curses.color_pair(3))
+                                stdscr.addstr(y + i, 45, f"Workgroup: ⟳ {prod_status}")
+                                stdscr.attroff(curses.color_pair(3))
+                        else:
+                            stdscr.addstr(y + i, 45, "Workgroup: ○ Pending")
+                    elif i == 4:  # Consumer namespaces
+                        # Show namespace status
+                        if phase_status.get('consumer_namespaces') == 'complete':
+                            stdscr.attron(curses.color_pair(2))
+                            stdscr.addstr(y + i, 45, f"Namespaces: ✓ {self.consumer_count} created")
+                            stdscr.attroff(curses.color_pair(2))
+                        else:
+                            stdscr.addstr(y + i, 45, f"Namespaces: ○ 0/{self.consumer_count}")
+                    elif i == 5:  # Consumer workgroups
+                        consumer_statuses = resources.get('consumer_statuses', {})
+                        available_count = sum(1 for s in consumer_statuses.values() if s == "AVAILABLE")
+                        creating_count = sum(1 for s in consumer_statuses.values() if s == "CREATING")
+                        
+                        # Get an example consumer workgroup name if available
+                        example_name = ""
+                        if resources.get('consumer_workgroups') and len(resources['consumer_workgroups']) > 0:
+                            first_consumer = resources['consumer_workgroups'][0]
+                            if len(first_consumer) <= 20:
+                                example_name = f" ({first_consumer})"
+                            else:
+                                example_name = f" (...{first_consumer[-17:]})"
+                        
+                        if creating_count > 0:
+                            stdscr.attron(curses.color_pair(3))
+                            stdscr.addstr(y + i, 45, f"Workgroups: {available_count}/{self.consumer_count} (⟳ {creating_count})")
+                            stdscr.attroff(curses.color_pair(3))
+                        elif available_count > 0:
+                            color = 2 if available_count == self.consumer_count else 5
+                            stdscr.attron(curses.color_pair(color))
+                            display_text = f"Workgroups: {available_count}/{self.consumer_count}"
+                            if example_name and len(display_text + example_name) < 45:
+                                display_text += example_name
+                            stdscr.addstr(y + i, 45, display_text)
+                            stdscr.attroff(curses.color_pair(color))
+                        else:
+                            stdscr.addstr(y + i, 45, f"Workgroups: 0/{self.consumer_count}")
+                    elif i == 6:  # VPC Endpoints
+                        endpoint_count = len(resources.get('vpc_endpoints', []))
+                        endpoint_statuses = resources.get('endpoint_statuses', {})
+                        creating = sum(1 for e in endpoint_statuses.values() if e.get('status') == 'CREATING')
+                        
+                        if creating > 0:
+                            stdscr.attron(curses.color_pair(3))
+                            stdscr.addstr(y + i, 45, f"Endpoints: {endpoint_count}/{self.consumer_count} (⟳ {creating} creating)")
+                            stdscr.attroff(curses.color_pair(3))
+                        elif endpoint_count > 0:
+                            color = 2 if endpoint_count >= self.consumer_count else 5
+                            stdscr.attron(curses.color_pair(color))
+                            stdscr.addstr(y + i, 45, f"Endpoints: {endpoint_count}/{self.consumer_count}")
+                            stdscr.attroff(curses.color_pair(color))
+                        else:
+                            stdscr.addstr(y + i, 45, f"Endpoints: 0/{self.consumer_count}")
+                    elif i == 7:  # NLB
+                        nlb_state = resources.get('nlb_state', '')
+                        if nlb_state == 'active':
+                            stdscr.attron(curses.color_pair(2))
+                            nlb_display = "NLB: ✓ Active"
+                            if resources.get('nlb_dns'):
+                                # Show last part of DNS name
+                                dns_suffix = resources['nlb_dns'].split('.')[0][-20:]
+                                nlb_display += f" ({dns_suffix}...)"
+                            stdscr.addstr(y + i, 45, nlb_display[:35])
+                            stdscr.attroff(curses.color_pair(2))
+                        elif nlb_state in ['provisioning', 'active_impaired']:
+                            stdscr.attron(curses.color_pair(3))
+                            stdscr.addstr(y + i, 45, f"NLB: ⟳ {nlb_state}")
+                            stdscr.attroff(curses.color_pair(3))
+                        else:
+                            stdscr.addstr(y + i, 45, "NLB: ○ Pending")
+                    elif i == 8:
                         # Each consumer has 3 IPs (one per AZ), so total targets = consumers * 3
                         expected_targets = self.consumer_count * 3
-                        stdscr.addstr(y + i, 45, f"Targets: {resources['healthy_targets']}/{expected_targets}")
+                        target_states = resources.get('target_states', {})
+                        
+                        # Show detailed target status
+                        if resources.get('total_targets', 0) > 0:
+                            healthy = target_states.get('healthy', 0)
+                            initial = target_states.get('initial', 0)
+                            
+                            if healthy == expected_targets:
+                                stdscr.attron(curses.color_pair(2))
+                                stdscr.addstr(y + i, 45, f"Targets: ✓ {healthy}/{expected_targets} healthy")
+                                stdscr.attroff(curses.color_pair(2))
+                            elif initial > 0:
+                                stdscr.attron(curses.color_pair(3))
+                                stdscr.addstr(y + i, 45, f"Targets: ⟳ {healthy} healthy, {initial} registering...")
+                                stdscr.attroff(curses.color_pair(3))
+                            else:
+                                stdscr.addstr(y + i, 45, f"Targets: {healthy}/{expected_targets} healthy")
+                        else:
+                            stdscr.addstr(y + i, 45, f"Targets: {resources['healthy_targets']}/{expected_targets}")
                 
                 y += len(PHASES) + 1
                 

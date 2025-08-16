@@ -83,11 +83,40 @@ output "scaling_instructions" {
     1. Update consumer_count variable (current: ${var.consumer_count})
     2. Run: terraform apply
     3. New consumers automatically added to NLB target group
+    4. Data sharing automatically configured for new consumers only
     
     To adjust consumer capacity:
-    1. Modify local.consumer_base_capacity and local.consumer_max_capacity in main.tf
+    1. Modify consumer_base_capacity and consumer_max_capacity variables
     2. Run: terraform apply
     
     The NLB automatically distributes queries across all healthy consumers.
+    Data sharing is automatically configured for new consumers without affecting existing ones.
   EOT
+}
+
+output "datashare_setup_status" {
+  description = "Data sharing setup module status"
+  value       = module.datashare_setup.setup_complete != null ? "Data sharing setup completed" : "Data sharing setup pending"
+}
+
+output "manual_setup_script" {
+  description = "Path to manual data sharing setup script"
+  value       = module.datashare_setup.setup_script_path
+}
+
+output "master_username" {
+  description = "Master username for database access"
+  value       = var.master_username
+  sensitive   = true
+}
+
+output "master_password" {
+  description = "Master password for database access"
+  value       = var.master_password
+  sensitive   = true
+}
+
+output "database_name" {
+  description = "Database name"
+  value       = var.database_name
 }

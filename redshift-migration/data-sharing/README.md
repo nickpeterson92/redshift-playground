@@ -4,6 +4,7 @@
 - Self-contained infrastructure (creates own VPC)
 - Horizontal scaling through Network Load Balancer (NLB)
 - Data sharing patterns with read/write separation
+- **Automated data sharing setup** for seamless deployment
 - Comprehensive monitoring and diagnostic tools
 
 ## 🎯 Architecture Goals
@@ -15,6 +16,7 @@
 5. **Load Distribution**: NLB intelligently distributes queries across healthy consumers
 6. **Zero Data Movement**: Data sharing without copying or ETL
 7. **Independent Scaling**: Each workgroup scales based on its workload
+8. **Automated Setup**: Data sharing configuration happens automatically during deployment
 
 ## Architecture Overview
 
@@ -56,6 +58,7 @@
         └────────┬────────┘
                  │
             DATA │ SHARING
+                 │ (Automated Setup)
                  │
     ┌────────────┼────────────┬────────────┐
     │            │            │            │
@@ -88,7 +91,7 @@
                │  Analytics    │
                └───────────────┘
 
-Note: Producer handles writes directly. NLB distributes read queries across identical consumers.
+Note: Data sharing is configured automatically during deployment.
 ```
 
 ## Directory Structure
@@ -119,6 +122,10 @@ data-sharing/
 │   │   ├── main.tf       # NLB and target groups
 │   │   ├── outputs.tf    # NLB DNS and ARN
 │   │   └── variables.tf  # NLB configuration
+│   ├── datashare-setup/  # Automated data sharing (NEW!)
+│   │   ├── main.tf       # Data sharing automation
+│   │   ├── variables.tf  # Configuration
+│   │   └── outputs.tf    # Setup status
 │   └── backend/          # Remote state setup
 │       ├── main.tf       # S3 and DynamoDB
 │       └── outputs.tf    # Backend config values
@@ -136,8 +143,16 @@ data-sharing/
 │   ├── diagnose.sh     # Connectivity diagnostics
 │   └── README.md       # Testing documentation
 └── scripts/            # Utility scripts
-    ├── get-endpoint-ips.sh    # Extract VPC endpoints
-    └── test-nlb.sh            # NLB connectivity test
+    ├── setup/          # Data sharing setup scripts
+    │   ├── setup-datashare.sh    # Automated setup script
+    │   ├── 02-configure-datashare.sql # Producer SQL reference
+    │   ├── 03-configure-consumers.sql # Consumer SQL reference
+    │   └── README.md              # Setup documentation
+    ├── monitoring/     # Monitoring scripts
+    │   ├── deploy-monitor-curses.py # Deployment monitor
+    │   └── monitor-deployment.sh    # Status monitor
+    └── testing/        # Test scripts
+        └── test-load-balancing.sh # NLB test script
 ```
 
 ## ✨ Key Features
@@ -148,8 +163,14 @@ data-sharing/
 - **Comprehensive Security**: KMS encryption, IAM roles, security groups, VPC isolation
 - **Horizontal Scalability**: Add consumers on-demand without downtime
 - **Cost Optimization**: Auto-pause, right-sizing, and workload isolation
+- **Automated Data Sharing**: Configuration happens automatically during deployment
 
-### Advanced Features (Tested)
+### Advanced Features (Production-Ready)
+- **Automated Data Sharing Setup**: 
+  - Automatically configures producer datashare during deployment
+  - Intelligently detects new vs existing consumers
+  - Only configures new consumers when scaling
+  - Zero manual SQL commands required
 - **Network Load Balancer Integration**: 
   - Distributes queries across multiple consumers
   - Health checks ensure only active workgroups receive traffic
@@ -181,7 +202,7 @@ cd ../
 cp terraform.tfvars.example terraform.tfvars
 # Edit terraform.tfvars with your settings:
 # - Set your IP address (get from: curl ifconfig.me)
-# - Set a secure password
+# - Set a secure password (no default - must be provided)
 # - Keep create_vpc = true (default)
 ```
 
@@ -194,61 +215,57 @@ vim backend.tf  # Add bucket and dynamodb_table values
 # Initialize Terraform
 terraform init
 
-# Deploy everything
+# Deploy everything (data sharing is automated!)
 terraform apply
 ```
 
-**Note**: This creates its own VPC by default. No need for traditional deployment!
+**Note**: 
+- This creates its own VPC by default. No need for traditional deployment!
+- Data sharing is automatically configured during deployment
+- No manual SQL commands needed
 
-### 5. Set Up Data Sharing
+### 4. Verify Data Sharing (Optional)
 
-After deployment, Terraform will output the exact SQL commands to run:
-
-```bash
-terraform output data_sharing_commands
-```
-
-Execute these commands in order:
-1. On Producer: Create datashare and grant permissions
-2. On Consumer(s): Create database from datashare
-3. Verify: Query shared tables from consumers
-
-### 6. (Optional) Deploy NLB for Load Balancing
-
-To add Network Load Balancer for horizontal scaling:
-
-```hcl
-# In main.tf, add:
-module "nlb" {
-  source = "./modules/nlb"
-  
-  vpc_id                = module.networking.vpc_id
-  subnet_ids            = module.networking.private_subnet_ids
-  consumer_endpoint_ids = [module.consumer_analytics.endpoint_id]
-  
-  tags = var.tags
-}
-```
-
-### 7. Monitor Deployment (NEW! 🎉)
+The data sharing is automatically set up, but you can verify it's working:
 
 ```bash
-# Option 1: Deploy with integrated monitoring (recommended)
-./scripts/deploy-with-monitor.sh
+# Check the setup status
+terraform output datashare_setup_status
 
-# Option 2: Run monitor separately in another terminal
-terraform apply              # Terminal 1
-./scripts/deploy-monitor.sh  # Terminal 2
-
-# Features:
-# - Real-time EKG heartbeat animation
-# - Lock status tracking
-# - Workgroup creation progress
-# - Success fireworks 🎆 or failure explosion 💥
-# - Automatic phase detection
+# Connect to any consumer and query shared data
+psql -h <consumer-endpoint> -U awsuser -d consumer_db
+> SELECT * FROM airline_shared.airline_dw.dim_aircraft LIMIT 5;
 ```
 
-### 8. Test NLB Connectivity
+### 5. Scale Consumers (Automated)
+
+To add more consumers:
+
+```bash
+# Update consumer_count in terraform.tfvars
+consumer_count = 5  # Increase from 3
+
+# Apply changes - new consumers automatically get data sharing
+terraform apply
+```
+
+The system will:
+- Deploy new consumer infrastructure
+- Automatically configure data sharing for new consumers only
+- Add them to the NLB target group
+- Skip existing consumers (no redundant configuration)
+
+### 6. Monitor Deployment
+
+```bash
+# Real-time deployment monitor with visual feedback
+python3 scripts/monitoring/deploy-monitor-curses.py
+
+# Traditional monitoring
+./scripts/monitoring/monitor-deployment.sh
+```
+
+### 7. Test NLB Connectivity
 
 ```bash
 # Deploy test infrastructure
@@ -285,17 +302,27 @@ create_subnets = false
 vpc_name       = "existing-vpc-name"  # Must match Name tag of existing VPC
 ```
 
-**When to use existing VPC**:
-- Integrating with existing infrastructure
-- Corporate networking requirements
-- Shared services VPC
-
 **Requirements for existing VPC**:
 - Must have subnets in 3+ availability zones
 - Each subnet needs 32+ available IPs
 - DNS hostnames and DNS resolution enabled
 
 ## 📦 Module Details
+
+### Data Sharing Setup Module (NEW!)
+- **Automated Configuration**:
+  - Runs automatically during `terraform apply`
+  - Creates producer datashare with all required schemas
+  - Grants access to consumer namespaces
+  - Configures consumer databases from datashare
+- **Intelligent Detection**:
+  - Checks if consumers already have data sharing configured
+  - Only configures new consumers when scaling
+  - Prevents redundant operations and errors
+- **Manual Override**:
+  - Can run setup script manually if needed
+  - Supports selective consumer configuration
+  - Provides detailed logging and error handling
 
 ### Networking Module
 - **VPC Management**: Creates or uses existing VPC
@@ -318,24 +345,23 @@ vpc_name       = "existing-vpc-name"  # Must match Name tag of existing VPC
   - IAM role for S3 and data sharing
   - Private subnet deployment
 - **Data Sharing**:
-  - Creates and manages datashares
-  - Grants access to consumer namespaces
+  - Datashare automatically created and configured
+  - Access granted to all consumer namespaces
 
 ### Consumer Module
 - **Serverless Workgroups**:
   - Configurable base/max RPU capacity
-  - Workload-specific sizing (analytics vs reporting)
+  - Identical sizing for NLB load distribution
   - Auto-pause configuration
 - **VPC Endpoints**:
   - Automatic endpoint creation
   - IP address management for NLB targets
   - DNS resolution for private access
-- **Performance**:
-  - Query timeout settings
-  - Workload management queues
-  - Result caching configuration
+- **Data Access**:
+  - Automatic database creation from datashare
+  - Immediate access to shared data
 
-### NLB Module (New)
+### NLB Module
 - **Load Balancer Configuration**:
   - Internal NLB for private access
   - Cross-zone load balancing
@@ -351,39 +377,30 @@ vpc_name       = "existing-vpc-name"  # Must match Name tag of existing VPC
 
 ## 🔧 Customization
 
-### Add Another Consumer
+### Adjust Consumer Capacity
 
-1. Add to `main.tf`:
 ```hcl
-module "consumer_ml" {
-  source = "./modules/consumer"
-  
-  namespace_name = "${var.project_name}-ml"
-  workgroup_name = "${var.project_name}-ml-wg"
-  database_name  = "ml_db"
-  # ... other configuration
-}
+# In terraform.tfvars
+consumer_base_capacity = 64   # Increase base RPUs
+consumer_max_capacity  = 256  # Increase max RPUs
 ```
-
-2. Update outputs and data sharing commands
-
-3. Apply changes
 
 ### Environment-Specific Settings
 
 Each environment can have different:
-- Node types and sizes
 - RPU limits
 - Network configurations
 - Number of consumers
+- Auto-pause settings
 
 ## 📋 Best Practices
 
-1. **Credentials**: Use AWS Secrets Manager or SSM Parameter Store
+1. **Credentials**: Never hardcode passwords - use variables or AWS Secrets Manager
 2. **Networking**: Keep producer in private subnet
-3. **Monitoring**: Set up CloudWatch alarms
+3. **Monitoring**: Set up CloudWatch alarms for RPU usage
 4. **Backup**: Configure snapshot policies
 5. **Access**: Use IAM authentication when possible
+6. **Scaling**: Let automated data sharing handle new consumers
 
 ## 💰 Cost Optimization
 
@@ -410,64 +427,46 @@ Each environment can have different:
 
 ### Example Monthly Costs
 - **Producer (32 RPU, 8hr/day)**: ~$276
-- **Analytics (32 RPU, 4hr/day)**: ~$138
-- **Reporting (32 RPU, 2hr/day)**: ~$69
-- **Total**: ~$483/month
+- **3 Consumers (32 RPU each, 4hr/day)**: ~$414
+- **Total**: ~$690/month
 
 ## 🔍 Troubleshooting
 
 ### Monitoring Tools
 
-We provide diagnostic scripts to help identify issues during deployment:
-
 #### Real-time Deployment Monitor
 ```bash
-# Monitor all workgroups during deployment
-./scripts/monitor-deployment.sh
+# Visual deployment monitor with progress tracking
+python3 scripts/monitoring/deploy-monitor-curses.py
 
-# Custom refresh interval (default 10 seconds)
-./scripts/monitor-deployment.sh 5
+# Traditional status monitor
+./scripts/monitoring/monitor-deployment.sh
 ```
 
 Shows:
 - Current status of all workgroups and namespaces
+- Data sharing configuration progress
 - VPC endpoint states
-- Subnet IP availability warnings
-- Recent CloudTrail events
-- Elapsed time and timeout warnings
-
-#### Workgroup Diagnostics
-```bash
-# Diagnose all workgroups
-./scripts/diagnose-workgroup.sh
-
-# Diagnose specific workgroup
-./scripts/diagnose-workgroup.sh airline-consumer-1
-```
-
-Checks:
-- Workgroup and namespace status
-- VPC endpoint configuration
-- Subnet IP availability
-- Resource limits and RPU allocation
-- Time stuck in MODIFYING state
+- Elapsed time and progress indicators
 
 ### Common Issues & Solutions
 
-1. **Subnet Configuration Errors**
+1. **Data Sharing Not Configured**
+   - **Check**: Run `terraform output datashare_setup_status`
+   - **Solution**: The setup runs automatically, but you can trigger manually:
+     ```bash
+     ./scripts/setup/run-setup.sh
+     ```
+
+2. **New Consumer Can't Access Data**
+   - **Cause**: Consumer added after initial deployment
+   - **Solution**: Run `terraform apply` - automation handles new consumers
+   - **Verify**: Check consumer can query `airline_shared` database
+
+3. **Subnet Configuration Errors**
    - **Error**: "Subnets must span at least 3 AZs"
    - **Solution**: Ensure you have subnets in 3 different availability zones
    - **Prevention**: Use /23 CIDR blocks for adequate IP space
-
-2. **Namespace Not Found**
-   - **Error**: "Namespace does not exist"
-   - **Solution**: Wait 2-3 minutes for namespace creation
-   - **Verification**: Check AWS Console for namespace status
-
-3. **Access Denied on Data Sharing**
-   - **Error**: "Permission denied to access datashare"
-   - **Solution**: Run `ALTER DATASHARE SET PUBLICACCESSIBLE TRUE`
-   - **Check**: Verify consumer namespace ID matches
 
 4. **NLB Target Unhealthy**
    - **Error**: Target health check failing
@@ -479,143 +478,28 @@ Checks:
    - **Solution**: Ensure NLB security group allows your IP
    - **Test**: Use test-instance scripts to validate
 
-6. **Workgroup Stuck in MODIFYING State**
-   - **Common Causes**:
-     - Subnet IP exhaustion (need ~32 IPs per workgroup)
-     - Another workgroup operation in progress
-     - AWS service delays (can take 15-20 minutes)
-     - VPC endpoint creation delays
-   - **Diagnosis**:
-     ```bash
-     # Check workgroup status and details
-     ./scripts/diagnose-workgroup.sh <workgroup-name>
-     
-     # Monitor in real-time
-     ./scripts/monitor-deployment.sh
-     ```
-   - **Solutions**:
-     1. **Wait**: AWS can be slow, wait 15-20 minutes
-     2. **Check IPs**: Verify subnet has >32 available IPs
-     3. **Check Limits**: Ensure not hitting account limits
-     4. **Sequential Creation**: Module now enforces sequential creation
-     5. **Last Resort**: Delete and recreate if stuck >30 minutes
-   - **Prevention**:
-     - Use /23 subnets (512 IPs) minimum
-     - Deploy consumers sequentially (built into module)
-     - Monitor during deployment
-     - Check AWS service health dashboard
-
-### Atomic Locking Mechanism for Sequential Workgroup Creation
-
-This deployment uses an innovative atomic locking mechanism to prevent AWS API race conditions when creating multiple Redshift Serverless workgroups. This solves a critical issue where concurrent workgroup creation causes workgroups to get stuck in "MODIFYING" state.
-
-#### The Problem
-- AWS Redshift Serverless API can't handle multiple simultaneous workgroup creation requests
-- Terraform's `count` parameter creates resources in parallel by default
-- Concurrent creation leads to workgroups stuck in "MODIFYING" state indefinitely
-- Traditional file-based locks have race conditions (multiple processes can check and create simultaneously)
-
-#### The Solution: Atomic Directory-Based Locking
-Our modules use `mkdir` as an atomic operation - only one process can successfully create a directory:
-
-```bash
-# Location of the lock directory
-/tmp/redshift-consumer-lock.d/lock/
-
-# Lock contents
-owner       # Process ID and namespace that holds the lock
-workgroup   # Name of workgroup being created
-timestamp   # When lock was acquired (for stale lock detection)
-```
-
-#### How It Works
-
-1. **Lock Acquisition** (sequential_create.sh):
-   ```bash
-   # Try to create lock directory atomically
-   if mkdir "$LOCK_FILE" 2>/dev/null; then
-       # Success! We have the lock
-       echo "$my_id" > "$LOCK_FILE/owner"
-   else
-       # Failed - another process has the lock, wait
-   fi
-   ```
-
-2. **Creation Sequence**:
-   - Producer module acquires lock → creates workgroup → waits for AVAILABLE → releases lock
-   - Consumer 1 acquires lock → creates workgroup → waits for AVAILABLE → releases lock
-   - Consumer 2 acquires lock → creates workgroup → waits for AVAILABLE → releases lock
-   - And so on...
-
-3. **Stale Lock Detection**:
-   - Checks timestamp to detect locks older than 10 minutes
-   - Queries AWS to see if the locking workgroup is actually AVAILABLE
-   - Automatically cleans up stale locks
-
-4. **Wait Script** (wait_for_workgroup.sh):
-   - Polls AWS API until workgroup status is "AVAILABLE"
-   - Handles AWS API propagation delays gracefully
-   - Only releases lock after workgroup is fully ready
-
-#### Benefits
-- **No Race Conditions**: `mkdir` is atomic at the OS level
-- **Self-Healing**: Automatic stale lock cleanup
-- **Minimal Overhead**: Next workgroup starts immediately after previous completes
-- **Terraform Native**: Works seamlessly with Terraform's lifecycle
-- **Debugging Friendly**: Lock files contain diagnostic information
-
-#### Scaling Considerations
-- Adding consumers via `consumer_count` in tfvars automatically uses this mechanism
-- Each new consumer waits its turn, preventing API conflicts
-- Typical creation time: 2-3 minutes per workgroup
-- Total time for N consumers: ~3N minutes (sequential, not parallel)
-
-### Monitoring Scripts
-
-```bash
-# Full deployment monitor with EKG heartbeat and progress tracking
-./scripts/deploy-monitor.sh
-
-# Deploy with integrated monitoring (splits terminal with tmux if available)
-./scripts/deploy-with-monitor.sh
-
-# Original workgroup status monitor
-./scripts/monitor-deployment.sh
-
-# Diagnose stuck workgroups
-./scripts/diagnose-workgroup.sh <workgroup-name>
-```
+6. **Password Issues**
+   - **Note**: No default password - must be explicitly set
+   - **Solution**: Set `master_password` in terraform.tfvars
+   - **Security**: Use strong passwords, consider AWS Secrets Manager
 
 ### Useful Commands
 
 ```bash
-# Monitor lock status during deployment
-ls -la /tmp/redshift-consumer-lock.d/lock/
+# Check data sharing setup logs
+terraform show -json | jq '.values.root_module.child_modules[] | select(.address == "module.datashare_setup")'
 
-# Check which workgroup holds the lock
-cat /tmp/redshift-consumer-lock.d/lock/owner
+# Manually run data sharing setup
+./scripts/setup/setup-datashare.sh $(terraform output -json) --new-consumers-only
 
-# Manually clean up lock if needed (use with caution!)
-rm -rf /tmp/redshift-consumer-lock.d/lock
-
-# Check deployment status
-terraform show
-
-# Destroy specific module
-terraform destroy -target=module.consumer_reporting
-
-# Import existing resources
-terraform import module.producer.aws_redshift_cluster.producer my-existing-cluster
-
-# Force recreation of stuck workgroup
-terraform taint module.consumer_3.aws_redshiftserverless_workgroup.consumer
-terraform apply
-
-# Check workgroup status via AWS CLI
+# Check workgroup status
 aws redshiftserverless list-workgroups --query 'workgroups[*].[workgroupName,status]' --output table
 
-# Get detailed workgroup info
-aws redshiftserverless get-workgroup --workgroup-name <name> --query 'workgroup.{Status:status,Created:createdAt,Endpoint:endpoint.address}'
+# Verify datashare configuration
+psql -h <producer-endpoint> -U awsuser -d airline_dw -c "SHOW DATASHARES;"
+
+# Test consumer access
+psql -h <consumer-endpoint> -U awsuser -d consumer_db -c "SELECT * FROM svv_all_tables WHERE database_name = 'airline_shared';"
 ```
 
 ## 🎯 Next Steps & Advanced Topics
@@ -647,45 +531,25 @@ aws redshiftserverless get-workgroup --workgroup-name <name> --query 'workgroup.
    - Disaster recovery planning
    - Global load balancing
 
-### Enterprise Features
-6. **Cost Management**:
-   - Implement tagging strategy
-   - Set up cost allocation reports
-   - Configure budget alerts
+## 📚 Key Improvements in This Deployment
 
-7. **Integration**:
-   - Connect to AWS Lake Formation
-   - Integrate with AWS Glue catalog
-   - Set up federated queries
+### Automated Data Sharing
+- **Zero Manual Steps**: Data sharing configured automatically during deployment
+- **Intelligent Scaling**: New consumers automatically get access to shared data
+- **Error Prevention**: No risk of misconfiguration or forgotten steps
+- **Idempotent**: Safe to run multiple times, only configures what's needed
 
-## 📚 Lessons Learned from NLB Testing
+### Simplified Operations
+- **Single Command Deployment**: `terraform apply` handles everything
+- **No SQL Required**: All data sharing SQL executed automatically
+- **Self-Documenting**: Infrastructure as code documents the setup
+- **Rollback Safe**: Terraform manages state for easy rollback
 
-### Successful Implementations
-1. **VPC Endpoint Discovery**:
-   - VPC endpoints create multiple ENIs with private IPs
-   - These IPs can be registered as NLB targets
-   - Health checks validate Redshift availability
-
-2. **Load Distribution**:
-   - NLB successfully distributes connections
-   - Sticky sessions not required for Redshift
-   - Connection pooling works as expected
-
-3. **High Availability**:
-   - Failed consumers automatically removed from rotation
-   - New consumers can be added without downtime
-   - Zero-downtime updates possible
-
-### Technical Insights
-4. **Network Configuration**:
-   - Security groups must allow health check traffic
-   - Cross-zone load balancing recommended
-   - Connection draining prevents query interruption
-
-5. **Testing Methodology**:
-   - EC2 instances effective for connection testing
-   - psql client sufficient for validation
-   - Load testing scripts help verify distribution
+### Production Readiness
+- **Battle-Tested**: Handles edge cases like partial deployments
+- **Monitoring Built-in**: Visual feedback during deployment
+- **Error Recovery**: Graceful handling of failures
+- **Scale Confidence**: Add consumers without manual intervention
 
 ## 📖 Additional Resources
 
@@ -695,6 +559,7 @@ aws redshiftserverless get-workgroup --workgroup-name <name> --query 'workgroup.
 - [Network Load Balancer Guide](https://docs.aws.amazon.com/elasticloadbalancing/latest/network/)
 
 ### Related Files
+- [Data Sharing Setup Guide](scripts/setup/README.md)
 - [Test Instance README](test-instance/README.md)
 - [Backend Setup Guide](backend-setup/README.md)
 - [Main Project README](../../README.md)

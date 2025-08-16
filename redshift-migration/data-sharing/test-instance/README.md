@@ -57,7 +57,7 @@ terraform apply
 
 #### Option 1: Quick Connectivity Test
 ```bash
-export REDSHIFT_PASSWORD='Password123'
+export REDSHIFT_PASSWORD='YourActualPassword'  # Use the password from terraform.tfvars
 ./run-remote-test.sh
 ```
 
@@ -131,7 +131,7 @@ ssh -i test-instance.pem ec2-user@$(terraform output -raw instance_public_ip)
 ### Run Queries Directly
 ```bash
 cd redshift-tests
-export REDSHIFT_PASSWORD='Password123'
+export REDSHIFT_PASSWORD='YourActualPassword'  # Use the password from terraform.tfvars
 
 # Connect through NLB
 psql -h <nlb-endpoint> -p 5439 -U admin -d consumer_db
@@ -170,14 +170,14 @@ scp -i test-instance.pem ../test-nlb* ec2-user@<instance-ip>:~/redshift-tests/
 ```
 
 ### Password Issues
-- Sometimes the terraform deployment doesn't apply the password provided in tfvars 🤷‍♂️.
-- Reset the password using AWS CLI (mind use of special chars, Redshift is strict!)
-- Update all namespaces if changed:
+- The password must be explicitly set in terraform.tfvars (no default value)
+- Passwords must meet AWS requirements (8+ chars, upper, lower, number)
+- Reset the password using AWS CLI if needed:
 ```bash
 aws redshift-serverless update-namespace \
   --namespace-name airline-consumer-1 \
   --admin-username admin \
-  --admin-user-password 'Password123' # Example password, use a good one!
+  --admin-user-password 'YourNewPassword123!' # Use a strong password
 ```
 
 ## 🏗️ Infrastructure Details
