@@ -22,3 +22,9 @@ variable "redshift_password" {
   default     = ""
   sensitive   = true
 }
+
+variable "instance_count" {
+  description = "Number of test instances to deploy for stress testing"
+  type        = number
+  default     = 2
+}

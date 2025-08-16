@@ -1,41 +1,42 @@
-output "instance_public_ip" {
-  description = "Public IP of the test instance"
-  value       = aws_instance.test.public_ip
+output "instance_count" {
+  description = "Number of test instances deployed"
+  value       = var.instance_count
 }
 
-output "ssh_command" {
-  description = "SSH command to connect to the test instance"
-  value       = "ssh -i ${path.module}/test-instance.pem ec2-user@${aws_instance.test.public_ip}"
+output "instance_public_ips" {
+  description = "Public IPs of all test instances"
+  value       = aws_instance.test[*].public_ip
 }
 
-output "run_test_commands" {
-  description = "Commands to run the test scripts"
+output "instance_private_ips" {
+  description = "Private IPs of all test instances"
+  value       = aws_instance.test[*].private_ip
+}
+
+output "ssh_commands" {
+  description = "SSH commands for all instances"
+  value = {
+    for idx, ip in aws_instance.test[*].public_ip :
+    "instance_${idx + 1}" => "ssh -i ${path.module}/test-instance.pem ec2-user@${ip}"
+  }
+}
+
+output "stress_test_info" {
+  description = "Information for running stress tests"
   value = <<-EOT
-    # SSH into the instance:
-    ssh -i ${path.module}/test-instance.pem ec2-user@${aws_instance.test.public_ip}
+    ============================================
+    STRESS TEST DEPLOYMENT READY
+    ============================================
+    Instances Deployed: ${var.instance_count}
     
-    # Once connected, run tests:
-    cd redshift-tests
+    To run a stress test:
+    1. Use the stress-test.sh script
+    2. Or run manually on each instance
     
-    # Set your Redshift password:
-    export REDSHIFT_PASSWORD='your-password-here'
+    Quick test command:
+    ./stress-test.sh
     
-    # Run the bash test:
-    ./test-nlb.sh
-    
-    # Or run the Python test:
-    python3 test-nlb-connection.py
+    To deploy more instances:
+    terraform apply -var="instance_count=10"
   EOT
-}
-
-output "seamless_test_command" {
-  description = "Run test seamlessly from your terminal"
-  value = <<-EOT
-    # Run bash test directly from your terminal:
-    ssh -i ${path.module}/test-instance.pem ec2-user@${aws_instance.test.public_ip} "cd redshift-tests && REDSHIFT_PASSWORD='${var.redshift_password}' ./test-nlb.sh"
-    
-    # Run Python test directly from your terminal:
-    ssh -i ${path.module}/test-instance.pem ec2-user@${aws_instance.test.public_ip} "cd redshift-tests && REDSHIFT_PASSWORD='${var.redshift_password}' python3 test-nlb-connection.py"
-  EOT
-  sensitive = true
 }
