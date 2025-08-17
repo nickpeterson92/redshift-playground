@@ -1,16 +1,16 @@
-# Outputs for Data Sharing Setup Module
+# Outputs for Snapshot Restore Module
 
-output "setup_complete" {
-  description = "Indicates that data sharing setup is complete"
-  value       = null_resource.setup_datashare.id
+output "restore_complete" {
+  description = "ID of the restore resource when complete"
+  value       = try(null_resource.restore_snapshot[0].id, null)
 }
 
-output "consumer_states" {
-  description = "Current state of consumer configurations"
-  value       = { for k, v in null_resource.consumer_state : k => v.triggers }
+output "snapshot_restored" {
+  description = "Whether a snapshot was restored"
+  value       = var.restore_from_snapshot
 }
 
-output "setup_script_path" {
-  description = "Path to the manual setup script"
-  value       = local_file.setup_script.filename
+output "snapshot_identifier" {
+  description = "The snapshot that was restored"
+  value       = var.restore_from_snapshot ? var.snapshot_identifier : "none"
 }

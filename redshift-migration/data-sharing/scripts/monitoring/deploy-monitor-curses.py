@@ -13,7 +13,7 @@ import threading
 import random
 import math
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional, Dict, Any, List
 import sys
@@ -88,6 +88,12 @@ class CursesMonitor:
         # AWS credential refresh
         self.last_credential_refresh = datetime.now()
         self.credential_refresh_interval = 55 * 60  # 55 minutes in seconds
+        self.credential_refresh_message = None
+        self.show_refresh_message_until = None
+        
+        # Refresh credentials on startup to ensure we start fresh
+        if os.environ.get('REFRESH_ON_START', '1') == '1':  # Default to refreshing
+            self.refresh_aws_credentials()
         
     def _detect_consumer_count(self):
         """Dynamically detect the number of consumers from various sources"""
@@ -165,24 +171,63 @@ class CursesMonitor:
     
     
     def refresh_aws_credentials(self):
-        """Refresh AWS credentials using aws-azure-login"""
+        """Refresh AWS credentials using aws-azure-login (non-blocking)"""
         try:
-            # Fire and forget - don't wait for completion
-            subprocess.Popen(
+            # Run aws-azure-login with --no-prompt to avoid interactive prompts
+            # Capture output to show feedback
+            proc = subprocess.Popen(
                 ["aws-azure-login", "--no-prompt"],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                stdin=subprocess.DEVNULL
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                stdin=subprocess.DEVNULL,
+                text=True
             )
+            
+            # Start a thread to read output and update status
+            def read_output():
+                try:
+                    stdout, stderr = proc.communicate(timeout=30)
+                    
+                    with self.state_lock:
+                        if proc.returncode == 0:
+                            # Parse output for useful info
+                            if "Assuming role" in stdout:
+                                # Extract role info
+                                import re
+                                role_match = re.search(r'Assuming role (arn:aws:iam::\d+:role/[\w-]+)', stdout)
+                                if role_match:
+                                    self.credential_refresh_message = f"Logged in: {role_match.group(1).split('/')[-1]}"
+                                else:
+                                    self.credential_refresh_message = "AWS credentials refreshed"
+                            else:
+                                self.credential_refresh_message = "AWS credentials refreshed"
+                            self.last_credential_refresh = datetime.now()
+                        else:
+                            self.credential_refresh_message = "Credential refresh failed"
+                        
+                        self.show_refresh_message_until = datetime.now() + timedelta(seconds=8)
+                        
+                except subprocess.TimeoutExpired:
+                    with self.state_lock:
+                        self.credential_refresh_message = "Credential refresh timeout"
+                        self.show_refresh_message_until = datetime.now() + timedelta(seconds=5)
+                except Exception as e:
+                    with self.state_lock:
+                        self.credential_refresh_message = f"Error: {str(e)[:30]}"
+                        self.show_refresh_message_until = datetime.now() + timedelta(seconds=5)
+            
+            import threading
+            threading.Thread(target=read_output, daemon=True).start()
+            
+            # Immediate feedback
             with self.state_lock:
-                self.last_credential_refresh = datetime.now()
-            # Log the refresh if debug mode
-            if os.environ.get('DEBUG'):
-                print(f"[{datetime.now().strftime('%H:%M:%S')}] AWS credentials refreshed", file=sys.stderr)
+                self.credential_refresh_message = "Refreshing AWS credentials..."
+                self.show_refresh_message_until = datetime.now() + timedelta(seconds=2)
+                
         except Exception as e:
-            # Silently fail - don't interrupt monitoring
-            if os.environ.get('DEBUG'):
-                print(f"[{datetime.now().strftime('%H:%M:%S')}] Failed to refresh credentials: {e}", file=sys.stderr)
+            with self.state_lock:
+                self.credential_refresh_message = f"Credential refresh failed: {e}"
+                self.show_refresh_message_until = datetime.now() + timedelta(seconds=5)
     
     def run_aws_command(self, service: str, command: str, query: str = None) -> Any:
         """Run AWS CLI command"""
@@ -788,7 +833,19 @@ class CursesMonitor:
                     stdscr.addstr(y, 30, status_text[:width-55])
                 
                 # Show credential refresh status on the right
-                if cred_remaining > 10:
+                # Check if we have a refresh message to show
+                refresh_msg = None
+                with self.state_lock:
+                    if self.show_refresh_message_until and datetime.now() < self.show_refresh_message_until:
+                        refresh_msg = self.credential_refresh_message
+                
+                if refresh_msg:
+                    # Show the refresh message temporarily
+                    stdscr.attron(curses.color_pair(4) | curses.A_BOLD)
+                    msg = f"🔑 {refresh_msg}"
+                    stdscr.addstr(y, width - len(msg) - 2, msg)
+                    stdscr.attroff(curses.color_pair(4) | curses.A_BOLD)
+                elif cred_remaining > 10:
                     stdscr.attron(curses.color_pair(2))
                     stdscr.addstr(y, width - 15, f"🔑 AWS: {int(cred_remaining)}m")
                     stdscr.attroff(curses.color_pair(2))
@@ -1011,72 +1068,6 @@ class CursesMonitor:
                             stdscr.addstr(y + i, 45, f"Targets: {resources['healthy_targets']}/{expected_targets}")
                 
                 y += len(PHASES) + 1
-                
-                # Data Sharing & Snapshot Status (tastefully placed above EKG)
-                if y < height - 4 and (self.phase_status.get('producer_workgroup') == 'complete' or 
-                                       self.phase_status.get('consumer_workgroups') == 'complete'):
-                    # Only show data sharing status if workgroups exist
-                    stdscr.addstr(y, 2, "DATA SHARING & SNAPSHOT")
-                    y += 1
-                    stdscr.addstr(y, 2, "─" * (width - 4))
-                    y += 1
-                    
-                    # Show snapshot status if relevant (check for snapshot-related resources)
-                    snapshot_info = resources.get('snapshot_info', None)
-                    if snapshot_info:
-                        # If we detect snapshot configuration
-                        stdscr.attron(curses.color_pair(3))
-                        stdscr.addstr(y, 2, "📸 Snapshot: Restoring airline data...")
-                        stdscr.attroff(curses.color_pair(3))
-                        y += 1
-                    
-                    # Determine data sharing status based on deployment phase
-                    datashare_status = resources.get('datashare_status', 'pending')
-                    
-                    # Simple status indicators based on deployment progress
-                    if deployment_complete:
-                        # If deployment is complete, assume data sharing is configured
-                        stdscr.attron(curses.color_pair(2))
-                        stdscr.addstr(y, 2, "✓ Data Sharing: Active")
-                        stdscr.attroff(curses.color_pair(2))
-                        
-                        # Show consumer access status in a compact way
-                        if self.consumer_count > 0:
-                            stdscr.addstr(y, 30, f"• {self.consumer_count} consumers → airline_shared database")
-                    elif (self.phase_status.get('health_checks') == 'complete' or 
-                          (self.phase_status.get('target_registration') == 'complete' and 
-                           resources.get('healthy_targets', 0) >= expected_targets)):
-                        # All infrastructure ready, data sharing can begin
-                        stdscr.attron(curses.color_pair(3))
-                        stdscr.addstr(y, 2, "⟳ Data Sharing: Configuring")
-                        stdscr.attroff(curses.color_pair(3))
-                        stdscr.addstr(y, 30, "• Creating datashare & granting access...")
-                    elif self.phase_status.get('nlb') == 'complete':
-                        # NLB ready, waiting for health checks
-                        stdscr.attron(curses.color_pair(5))
-                        stdscr.addstr(y, 2, "○ Data Sharing: Waiting")
-                        stdscr.attroff(curses.color_pair(5))
-                        stdscr.addstr(y, 30, "• Awaiting health checks to pass")
-                    elif self.phase_status.get('consumer_workgroups') == 'complete':
-                        # Workgroups ready, waiting for endpoints/NLB
-                        stdscr.attron(curses.color_pair(5))
-                        stdscr.addstr(y, 2, "○ Data Sharing: Waiting")
-                        stdscr.attroff(curses.color_pair(5))
-                        stdscr.addstr(y, 30, "• Awaiting VPC endpoints & load balancer")
-                    elif self.phase_status.get('producer_workgroup') == 'complete':
-                        # Producer ready, waiting for consumers
-                        stdscr.attron(curses.color_pair(5))
-                        stdscr.addstr(y, 2, "○ Data Sharing: Waiting")
-                        stdscr.attroff(curses.color_pair(5))
-                        stdscr.addstr(y, 30, "• Producer ready, consumers pending")
-                    else:
-                        # Not ready yet
-                        stdscr.attron(curses.color_pair(5))
-                        stdscr.addstr(y, 2, "○ Data Sharing: Pending")
-                        stdscr.attroff(curses.color_pair(5))
-                        stdscr.addstr(y, 30, "• Awaiting workgroup creation")
-                    
-                    y += 2
                 
                 # EKG at bottom
                 if y < height - 2:
