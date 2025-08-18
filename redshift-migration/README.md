@@ -1,202 +1,126 @@
 # AWS Redshift Migration Playground
 
-A comprehensive playground for exploring AWS Redshift deployment patterns, data sharing, and horizontal scaling with Network Load Balancer (NLB).
+A comprehensive playground for exploring AWS Redshift deployment patterns, data sharing, and horizontal scaling architectures.
 
-## 🎯 Purpose
+## 🎯 Overview
 
-This repository demonstrates:
-- Traditional Redshift cluster deployment
-- Modern Redshift Serverless architecture with data sharing
-- Horizontal scaling using NLB for query distribution
-- Infrastructure as Code using Terraform
-- Best practices for production-ready deployments
+This repository provides production-ready Terraform modules and deployment patterns for:
+- Traditional Redshift clusters
+- Modern Redshift Serverless with data sharing
+- Horizontal scaling using Network Load Balancers
+- Multi-consumer read replica patterns
 
-## 📁 Repository Structure
+## 📁 Project Structure
 
 ```
 redshift-migration/
-├── traditional/           # Traditional provisioned Redshift cluster
-├── data-sharing/         # Redshift Serverless with NLB and data sharing
-│   ├── modules/          # Terraform modules (producer, consumer, nlb, networking)
-│   ├── environments/     # Environment-specific configurations
-│   └── test-instance/    # EC2 instances for testing NLB connectivity
-└── data-generation/      # Scripts for generating sample airline data
+├── traditional/          # Traditional provisioned Redshift cluster
+│   └── README.md        # Detailed setup and configuration
+│
+├── data-sharing/        # Redshift Serverless with NLB and data sharing
+│   ├── README.md        # Complete deployment guide
+│   ├── modules/         # Reusable Terraform modules
+│   ├── environments/    # Environment configurations (dev/staging/prod)
+│   ├── test-instance/   # EC2-based testing infrastructure
+│   └── scripts/         # Monitoring and utility scripts
+│
+└── data-generation/     # Sample data generation utilities
+    └── README.md        # Data generation guide
 ```
 
 ## 🚀 Quick Start
 
-### Prerequisites
-
-- AWS CLI configured with appropriate credentials
-- Terraform >= 1.0
-- Python 3.x (for data generation scripts)
-- psql or AWS Query Editor for database access
-
-### 1. Deploy Data Sharing Architecture
+### For Redshift Serverless with Data Sharing (Recommended)
 
 ```bash
 cd data-sharing
-
-# Copy and configure your environment
-cp environments/dev/terraform.tfvars.example environments/dev/terraform.tfvars
-# Edit terraform.tfvars with your values
-
-# Initialize and deploy
-terraform init -backend-config=environments/dev/backend-config.hcl
-terraform apply
+# Follow the comprehensive guide in data-sharing/README.md
 ```
 
-### 2. Deploy Test Instances (Optional)
+This deployment includes:
+- ✅ Self-contained VPC infrastructure
+- ✅ Producer namespace for writes
+- ✅ Multiple consumer workgroups for reads
+- ✅ Network Load Balancer for query distribution
+- ✅ Visual deployment monitoring
+- ✅ Cost optimization with auto-pause
+
+### For Traditional Redshift Cluster
 
 ```bash
-cd test-instance
-terraform init
-terraform apply
-
-# Test NLB load balancing
-./test-load-balancing.sh
+cd traditional
+# Follow the guide in traditional/README.md
 ```
 
-### 3. Generate Sample Data
+## 🏗️ Architecture Patterns
 
-```bash
-cd data-generation
-python3 generate-airline-data-simple.py
+### Pattern 1: Data Sharing with Horizontal Scaling
 ```
-
-## 🏗️ Architecture Overview
-
-### Data Sharing Architecture
-
+Producer (Writes) → Data Sharing → Consumers (Reads) → NLB → Applications
 ```
-┌─────────────────┐
-│    Producer     │ ← Writes (ETL, Data Ingestion)
-│   (Serverless)  │
-│  airline_dw DB  │
-└────────┬────────┘
-         │ Data Share
-    ┌────┴────┬──────────┐
-    ↓         ↓          ↓
-┌────────┐ ┌────────┐ ┌────────┐
-│Consumer│ │Consumer│ │Consumer│ ← Reads (Analytics, BI)
-│   1    │ │   2    │ │   N    │
-└────────┘ └────────┘ └────────┘
-    ↑         ↑          ↑
-    └────────┬───────────┘
-         [  NLB  ]
-             ↑
-         Queries from Applications
+**Use Case**: High-concurrency read workloads with workload isolation
+
+### Pattern 2: Traditional Single Cluster
 ```
-
-### Key Features
-
-- **Producer Workgroup**: Handles all write operations
-- **Consumer Workgroups**: Read-only access via data sharing
-- **Network Load Balancer**: Distributes queries across consumers
-- **Auto-scaling**: Each workgroup scales independently (32-256 RPU)
-- **High Availability**: Multiple consumers for redundancy
-
-## 📊 Data Model
-
-The sample airline data warehouse includes:
-
-### Dimension Tables
-- `dim_aircraft` - Aircraft fleet information
-- `dim_airport` - Airport details and hub status
-- `dim_customer` - Customer profiles and loyalty tiers
-- `dim_date` - Date dimension for time-based analysis
-- `dim_flight` - Flight routes and schedules
-
-### Fact Tables
-- `fact_bookings` - Booking transactions
-- `fact_flights` - Flight operations and delays
-
-## 🔧 Configuration
-
-### Environment Variables
-
-Create `terraform.tfvars` from the example:
-
-```hcl
-aws_region      = "us-west-2"
-project_name    = "airline"
-environment     = "dev"
-master_username = "admin"
-master_password = "YourSecurePassword123!"  # REQUIRED - no default, must be set!
-allowed_ip      = "YOUR.IP.HERE/32"
-consumer_count  = 2  # Number of consumer workgroups
+Applications → Redshift Cluster → All Workloads
 ```
+**Use Case**: Simple deployments with predictable workloads
 
-### Scaling Configuration
+## 📊 Sample Data
 
-Adjust in `main.tf`:
+The repository includes scripts to generate a sample airline data warehouse with:
+- Dimension tables (aircraft, airports, customers, dates, flights)
+- Fact tables (bookings, flight operations)
+- ~1GB of sample data for testing
 
-```hcl
-locals {
-  consumer_base_capacity = 32   # Minimum RPUs
-  consumer_max_capacity  = 128  # Maximum RPUs
-}
-```
+See `data-generation/README.md` for details.
 
-## 🧪 Testing
+## 🔧 Key Technologies
 
-### Test NLB Connectivity
+- **Terraform**: Infrastructure as Code
+- **AWS Redshift Serverless**: Modern serverless data warehouse
+- **Network Load Balancer**: Layer 4 load distribution
+- **Python**: Monitoring and data generation scripts
+- **PostgreSQL**: Client tools and SQL scripts
 
-```bash
-# From test-instance directory
-export REDSHIFT_PASSWORD='YourActualPassword'  # Use the password from terraform.tfvars
-./run-remote-test.sh         # Quick connectivity test
-./run-remote-test.sh python  # Load distribution test
-./test-load-balancing.sh     # Test from both EC2 instances
-```
+## 📚 Documentation
 
-### Query Through NLB
+Each subdirectory contains detailed documentation:
+- [`data-sharing/README.md`](data-sharing/README.md) - Complete Serverless deployment guide
+- [`data-sharing/test-instance/README.md`](data-sharing/test-instance/README.md) - NLB testing guide
+- [`data-sharing/environments/README.md`](data-sharing/environments/README.md) - Multi-environment setup
+- [`traditional/README.md`](traditional/README.md) - Traditional cluster deployment
 
-```sql
--- Connect via NLB endpoint
-psql -h <nlb-endpoint> -p 5439 -U admin -d consumer_db
+## 🔒 Security Notes
 
--- Query shared data
-SELECT * FROM airline_shared.airline_dw.dim_aircraft LIMIT 10;
-```
+- Never commit passwords or secrets to version control
+- Use AWS Secrets Manager for production deployments
+- Follow least-privilege IAM policies
+- Enable encryption at rest and in transit
+- Use VPC endpoints for private connectivity
 
-## 📈 Monitoring
+## 💰 Cost Considerations
 
-- **AWS Console**: Monitor workgroup metrics, query performance
-- **CloudWatch**: Set up alarms for RPU usage, query queue time
-- **Query Editor**: Test queries and validate data sharing
+**Redshift Serverless**:
+- Pay only for active RPU-hours
+- Auto-pause when idle
+- Scale from 32 to 512 RPUs
 
-## 🔒 Security
-
-- All passwords stored in `.tfvars` (never committed)
-- VPC isolation with security groups
-- SSL/TLS encryption for all connections
-- IAM roles for service permissions
-- Data sharing uses namespace-level grants
-
-## 💰 Cost Optimization
-
-- Serverless charges only for active RPU-hours
-- Start with minimum base capacity (32 RPU)
-- Auto-scaling handles peak loads
-- Pause workgroups when not in use
-
-## 🐛 Known Issues
-
-- AWS limit: Creating 4+ concurrent workgroups may cause issues
-- NLB health checks require VPC internal access (security group rule)
-- Redshift passwords cannot contain certain special characters
-
-## 📚 Additional Resources
-
-- [AWS Redshift Serverless Documentation](https://docs.aws.amazon.com/redshift/latest/mgmt/serverless.html)
-- [Redshift Data Sharing Guide](https://docs.aws.amazon.com/redshift/latest/dg/datashare.html)
-- [Terraform AWS Provider](https://registry.terraform.io/providers/hashicorp/aws/latest)
+**Traditional Clusters**:
+- Pay for provisioned nodes 24/7
+- Reserved instances for cost savings
+- Manual pause/resume required
 
 ## 🤝 Contributing
 
-This is a learning playground - feel free to experiment, break things, and learn!
+This is a learning playground - feel free to experiment and share improvements!
 
 ## 📝 License
 
-This is a personal learning project. Use at your own risk.
+Personal learning project - use at your own risk.
+
+## 🔗 Resources
+
+- [AWS Redshift Documentation](https://docs.aws.amazon.com/redshift/)
+- [Terraform AWS Provider](https://registry.terraform.io/providers/hashicorp/aws/latest)
+- [Redshift Data Sharing Guide](https://docs.aws.amazon.com/redshift/latest/dg/datashare.html)

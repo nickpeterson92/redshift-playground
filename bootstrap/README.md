@@ -11,13 +11,13 @@ This directory contains the foundational infrastructure that must be deployed BE
                          │ HTTPS/gRPC
                          ▼
 ┌─────────────────────────────────────────────────────────┐
-│                    Foundation VPC                        │
+│                    Foundation VPC                       │
 │  ┌──────────────────────────────────────────────────┐   │
 │  │            Private Subnets (Multi-AZ)            │   │
-│  │  ┌─────────────────────────────────────────┐    │   │
-│  │  │     ECS Fargate - Harness Delegate      │    │   │
-│  │  │         (2+ replicas for HA)            │    │   │
-│  │  └─────────────────────────────────────────┘    │   │
+│  │  ┌─────────────────────────────────────────┐     │   │
+│  │  │     ECS Fargate - Harness Delegate      │     │   │
+│  │  │         (2+ replicas for HA)            │     │   │
+│  │  └─────────────────────────────────────────┘     │   │
 │  └──────────────────────────────────────────────────┘   │
 │  ┌──────────────────────────────────────────────────┐   │
 │  │            Public Subnets (Multi-AZ)             │   │
@@ -27,8 +27,8 @@ This directory contains the foundational infrastructure that must be deployed BE
                          │
                          ▼
 ┌─────────────────────────────────────────────────────────┐
-│              Application Infrastructure                  │
-│     (Redshift, NLB, etc. - Managed by Harness)         │
+│              Application Infrastructure                 │
+│     (Redshift, NLB, etc. - Managed by Harness)          │
 └─────────────────────────────────────────────────────────┘
 ```
 

@@ -4,7 +4,7 @@
 - Self-contained infrastructure (creates own VPC)
 - Horizontal scaling through Network Load Balancer (NLB)
 - Data sharing patterns with read/write separation
-- **Automated data sharing setup** for seamless deployment
+- Snapshot restoration capability
 - Comprehensive monitoring and diagnostic tools
 
 ## 🎯 Architecture Goals
@@ -16,7 +16,7 @@
 5. **Load Distribution**: NLB intelligently distributes queries across healthy consumers
 6. **Zero Data Movement**: Data sharing without copying or ETL
 7. **Independent Scaling**: Each workgroup scales based on its workload
-8. **Automated Setup**: Data sharing configuration happens automatically during deployment
+8. **Manual Data Sharing**: Configure data sharing post-deployment via SQL
 
 ## Architecture Overview
 
@@ -58,7 +58,7 @@
         └────────┬────────┘
                  │
             DATA │ SHARING
-                 │ (Automated Setup)
+                 │ (Manual Setup)
                  │
     ┌────────────┼────────────┬────────────┐
     │            │            │            │
@@ -91,7 +91,7 @@
                │  Analytics    │
                └───────────────┘
 
-Note: Data sharing is configured automatically during deployment.
+Note: Data sharing must be configured manually after deployment via SQL commands.
 ```
 
 ## Directory Structure
@@ -122,10 +122,10 @@ data-sharing/
 │   │   ├── main.tf       # NLB and target groups
 │   │   ├── outputs.tf    # NLB DNS and ARN
 │   │   └── variables.tf  # NLB configuration
-│   ├── datashare-setup/  # Automated data sharing (NEW!)
-│   │   ├── main.tf       # Data sharing automation
-│   │   ├── variables.tf  # Configuration
-│   │   └── outputs.tf    # Setup status
+│   └── snapshot-restore/ # Snapshot restoration module
+│       ├── main.tf       # Restoration logic
+│       ├── variables.tf  # Configuration
+│       └── outputs.tf    # Restoration status
 │   └── backend/          # Remote state setup
 │       ├── main.tf       # S3 and DynamoDB
 │       └── outputs.tf    # Backend config values
@@ -138,21 +138,19 @@ data-sharing/
 │       └── backend-config.hcl    # Backend config
 ├── test-instance/       # NLB testing infrastructure
 │   ├── main.tf         # EC2 test instances
-│   ├── second-instance.tf # Additional test node
+│   ├── instances.tf    # Additional test nodes
 │   ├── test-load-balancing.sh # Load test script
 │   ├── diagnose.sh     # Connectivity diagnostics
 │   └── README.md       # Testing documentation
 └── scripts/            # Utility scripts
-    ├── setup/          # Data sharing setup scripts
-    │   ├── setup-datashare.sh    # Automated setup script
-    │   ├── 02-configure-datashare.sql # Producer SQL reference
-    │   ├── 03-configure-consumers.sql # Consumer SQL reference
-    │   └── README.md              # Setup documentation
+    ├── deployment/     # Deployment helper scripts
+    │   ├── restore-snapshot.sh # Snapshot restoration script
+    │   └── deploy.sh   # Main deployment script
     ├── monitoring/     # Monitoring scripts
-    │   ├── deploy-monitor-curses.py # Deployment monitor
-    │   └── monitor-deployment.sh    # Status monitor
-    └── testing/        # Test scripts
-        └── test-load-balancing.sh # NLB test script
+    │   ├── deploy-monitor-curses.py # Visual deployment monitor
+    │   └── FILTERING_LOGIC.md # Resource filtering documentation
+    └── utils/          # Utility scripts
+        └── check-endpoints.sh # Endpoint verification
 ```
 
 ## ✨ Key Features
@@ -163,14 +161,13 @@ data-sharing/
 - **Comprehensive Security**: KMS encryption, IAM roles, security groups, VPC isolation
 - **Horizontal Scalability**: Add consumers on-demand without downtime
 - **Cost Optimization**: Auto-pause, right-sizing, and workload isolation
-- **Automated Data Sharing**: Configuration happens automatically during deployment
+- **Snapshot Restoration**: Restore existing data from snapshots
 
 ### Advanced Features (Production-Ready)
-- **Automated Data Sharing Setup**: 
-  - Automatically configures producer datashare during deployment
-  - Intelligently detects new vs existing consumers
-  - Only configures new consumers when scaling
-  - Zero manual SQL commands required
+- **Snapshot Restoration**: 
+  - Restore existing Redshift snapshots to producer namespace
+  - Configurable via terraform variables
+  - Supports both cluster and serverless snapshots
 - **Network Load Balancer Integration**: 
   - Distributes queries across multiple consumers
   - Health checks ensure only active workgroups receive traffic
@@ -231,29 +228,36 @@ vim backend.tf  # Add bucket and dynamodb_table values
 # Initialize Terraform
 terraform init
 
-# Deploy everything (data sharing is automated!)
+# Deploy infrastructure
 terraform apply
 ```
 
 **Note**: 
 - This creates its own VPC by default. No need for traditional deployment!
-- Data sharing is automatically configured during deployment
-- No manual SQL commands needed
+- After deployment, configure data sharing manually using SQL commands
+- See Data Sharing Setup section below for SQL reference
 
-### 4. Verify Data Sharing (Optional)
+### 4. Configure Data Sharing (Manual)
 
-The data sharing is automatically set up, but you can verify it's working:
+After infrastructure is deployed, configure data sharing:
 
-```bash
-# Check the setup status
-terraform output datashare_setup_status
+```sql
+-- Connect to producer
+psql -h <producer-endpoint> -U awsuser -d airline_dw
 
-# Connect to any consumer and query shared data
-psql -h <consumer-endpoint> -U awsuser -d consumer_db
-> SELECT * FROM airline_shared.airline_dw.dim_aircraft LIMIT 5;
+-- Create datashare (MUST set PUBLICACCESSIBLE for cross-namespace sharing)
+CREATE DATASHARE airline_share SET PUBLICACCESSIBLE TRUE;
+ALTER DATASHARE airline_share ADD SCHEMA airline_dw;
+ALTER DATASHARE airline_share ADD ALL TABLES IN SCHEMA airline_dw;
+
+-- Grant to consumers (repeat for each consumer namespace)
+GRANT USAGE ON DATASHARE airline_share TO NAMESPACE '<consumer-namespace-id>';
+
+-- On each consumer, create database from datashare
+CREATE DATABASE airline_shared FROM DATASHARE airline_share OF NAMESPACE '<producer-namespace-id>';
 ```
 
-### 5. Scale Consumers (Automated)
+### 5. Scale Consumers
 
 To add more consumers:
 
@@ -261,15 +265,15 @@ To add more consumers:
 # Update consumer_count in terraform.tfvars
 consumer_count = 5  # Increase from 3
 
-# Apply changes - new consumers automatically get data sharing
+# Apply changes
 terraform apply
 ```
 
-The system will:
-- Deploy new consumer infrastructure
-- Automatically configure data sharing for new consumers only
-- Add them to the NLB target group
-- Skip existing consumers (no redundant configuration)
+After deployment:
+1. Deploy new consumer infrastructure
+2. Manually grant datashare access to new consumer namespaces
+3. Create database from datashare on new consumers
+4. NLB automatically includes new consumers in target group
 
 ### 6. Monitor Deployment
 
@@ -325,20 +329,19 @@ vpc_name       = "existing-vpc-name"  # Must match Name tag of existing VPC
 
 ## 📦 Module Details
 
-### Data Sharing Setup Module (NEW!)
-- **Automated Configuration**:
-  - Runs automatically during `terraform apply`
-  - Creates producer datashare with all required schemas
-  - Grants access to consumer namespaces
-  - Configures consumer databases from datashare
-- **Intelligent Detection**:
-  - Checks if consumers already have data sharing configured
-  - Only configures new consumers when scaling
-  - Prevents redundant operations and errors
-- **Manual Override**:
-  - Can run setup script manually if needed
-  - Supports selective consumer configuration
-  - Provides detailed logging and error handling
+### Snapshot Restore Module
+- **Snapshot Restoration**:
+  - Restores existing snapshots to producer namespace
+  - Runs during `terraform apply` if configured
+  - Supports both cluster and serverless snapshots
+- **Configuration**:
+  - Enable via `restore_from_snapshot = true`
+  - Specify snapshot with `snapshot_identifier`
+  - Force re-restore with `force_restore = true`
+- **Validation**:
+  - Checks if data already exists before restoring
+  - Provides restoration status in outputs
+  - Handles errors gracefully
 
 ### Networking Module
 - **VPC Management**: Creates or uses existing VPC
@@ -361,8 +364,8 @@ vpc_name       = "existing-vpc-name"  # Must match Name tag of existing VPC
   - IAM role for S3 and data sharing
   - Private subnet deployment
 - **Data Sharing**:
-  - Datashare automatically created and configured
-  - Access granted to all consumer namespaces
+  - Manual datashare configuration required
+  - SQL commands provided in documentation
 
 ### Consumer Module
 - **Serverless Workgroups**:
@@ -374,8 +377,8 @@ vpc_name       = "existing-vpc-name"  # Must match Name tag of existing VPC
   - IP address management for NLB targets
   - DNS resolution for private access
 - **Data Access**:
-  - Automatic database creation from datashare
-  - Immediate access to shared data
+  - Manual database creation from datashare required
+  - Access available after SQL configuration
 
 ### NLB Module
 - **Load Balancer Configuration**:
@@ -416,7 +419,7 @@ Each environment can have different:
 3. **Monitoring**: Set up CloudWatch alarms for RPU usage
 4. **Backup**: Configure snapshot policies
 5. **Access**: Use IAM authentication when possible
-6. **Scaling**: Let automated data sharing handle new consumers
+6. **Scaling**: Remember to configure data sharing for new consumers
 
 ## 💰 Cost Optimization
 
@@ -467,9 +470,9 @@ Shows:
 
 ### Common Issues & Solutions
 
-1. **Data Sharing Not Configured - No airline_dw Schema**
+1. **Data Sharing Not Working - No airline_dw Schema**
    - **Cause**: Producer doesn't have the airline_dw schema (no snapshot restored)
-   - **Check**: Run `terraform output datashare_setup_status`
+   - **Check**: Connect to producer and verify schema exists
    - **Solutions**:
      a. Restore from snapshot:
      ```hcl
@@ -478,14 +481,12 @@ Shows:
      snapshot_identifier   = "your-snapshot-name"
      ```
      b. Then run: `terraform apply`
-     c. Or manually restore via AWS Console and re-run setup:
-     ```bash
-     ./scripts/setup/run-setup.sh
-     ```
+     c. Or manually restore via AWS Console
+     d. Then configure data sharing via SQL commands
 
 2. **New Consumer Can't Access Data**
-   - **Cause**: Consumer added after initial deployment
-   - **Solution**: Run `terraform apply` - automation handles new consumers
+   - **Cause**: Data sharing not configured for new consumer
+   - **Solution**: Manually grant datashare access and create database
    - **Verify**: Check consumer can query `airline_shared` database
 
 3. **Subnet Configuration Errors**
@@ -511,11 +512,9 @@ Shows:
 ### Useful Commands
 
 ```bash
-# Check data sharing setup logs
-terraform show -json | jq '.values.root_module.child_modules[] | select(.address == "module.datashare_setup")'
-
-# Manually run data sharing setup
-./scripts/setup/setup-datashare.sh $(terraform output -json) --new-consumers-only
+# Check namespace IDs for data sharing configuration
+terraform output producer_namespace_id
+terraform output consumer_namespace_ids
 
 # Check workgroup status
 aws redshiftserverless list-workgroups --query 'workgroups[*].[workgroupName,status]' --output table
@@ -525,6 +524,53 @@ psql -h <producer-endpoint> -U awsuser -d airline_dw -c "SHOW DATASHARES;"
 
 # Test consumer access
 psql -h <consumer-endpoint> -U awsuser -d consumer_db -c "SELECT * FROM svv_all_tables WHERE database_name = 'airline_shared';"
+```
+
+## 📊 Data Model
+
+The sample airline data warehouse includes:
+
+### Dimension Tables
+- `dim_aircraft` - Aircraft fleet information
+- `dim_airport` - Airport details and hub status
+- `dim_customer` - Customer profiles and loyalty tiers
+- `dim_date` - Date dimension for time-based analysis
+- `dim_flight` - Flight routes and schedules
+
+### Fact Tables
+- `fact_bookings` - Booking transactions
+- `fact_flights` - Flight operations and delays
+
+## 🎯 Data Sharing SQL Reference
+
+### Producer Side Configuration
+```sql
+-- Create datashare (MUST be PUBLICACCESSIBLE for cross-namespace sharing)
+CREATE DATASHARE airline_share SET PUBLICACCESSIBLE TRUE;
+
+-- Add schema to datashare
+ALTER DATASHARE airline_share ADD SCHEMA airline_dw;
+
+-- Add all tables in schema
+ALTER DATASHARE airline_share ADD ALL TABLES IN SCHEMA airline_dw;
+
+-- View datashares
+SHOW DATASHARES;
+
+-- Grant to specific consumer namespace
+GRANT USAGE ON DATASHARE airline_share TO NAMESPACE '<consumer-namespace-id>';
+```
+
+### Consumer Side Configuration
+```sql
+-- Create database from datashare
+CREATE DATABASE airline_shared FROM DATASHARE airline_share OF NAMESPACE '<producer-namespace-id>';
+
+-- Grant usage to users
+GRANT USAGE ON DATABASE airline_shared TO awsuser;
+
+-- Query shared data
+SELECT * FROM airline_shared.airline_dw.dim_aircraft LIMIT 10;
 ```
 
 ## 🎯 Next Steps & Advanced Topics
@@ -587,25 +633,25 @@ aws redshift-serverless list-snapshots \
    - Disaster recovery planning
    - Global load balancing
 
-## 📚 Key Improvements in This Deployment
+## 📚 Key Features of This Deployment
 
-### Automated Data Sharing
-- **Zero Manual Steps**: Data sharing configured automatically during deployment
-- **Intelligent Scaling**: New consumers automatically get access to shared data
-- **Error Prevention**: No risk of misconfiguration or forgotten steps
-- **Idempotent**: Safe to run multiple times, only configures what's needed
-
-### Simplified Operations
-- **Single Command Deployment**: `terraform apply` handles everything
-- **No SQL Required**: All data sharing SQL executed automatically
+### Infrastructure as Code
+- **Modular Design**: Reusable Terraform modules for all components
+- **Single Command Deployment**: `terraform apply` deploys all infrastructure
 - **Self-Documenting**: Infrastructure as code documents the setup
 - **Rollback Safe**: Terraform manages state for easy rollback
 
 ### Production Readiness
-- **Battle-Tested**: Handles edge cases like partial deployments
-- **Monitoring Built-in**: Visual feedback during deployment
-- **Error Recovery**: Graceful handling of failures
-- **Scale Confidence**: Add consumers without manual intervention
+- **High Availability**: Multiple consumers with load balancing
+- **Monitoring Built-in**: Visual deployment monitor with real-time status
+- **Security**: VPC isolation, security groups, IAM roles
+- **Cost Optimization**: Auto-pause and right-sizing capabilities
+
+### Scalability
+- **Horizontal Scaling**: Add consumers on-demand
+- **Load Distribution**: NLB automatically distributes queries
+- **Independent Scaling**: Each workgroup scales based on workload
+- **Zero Data Movement**: Data sharing without copying
 
 ## 📖 Additional Resources
 
@@ -615,11 +661,18 @@ aws redshift-serverless list-snapshots \
 - [Network Load Balancer Guide](https://docs.aws.amazon.com/elasticloadbalancing/latest/network/)
 
 ### Related Files
-- [Data Sharing Setup Guide](scripts/setup/README.md)
 - [Test Instance README](test-instance/README.md)
 - [Backend Setup Guide](backend-setup/README.md)
-- [Main Project README](../../README.md)
+- [Environment Configuration](environments/README.md)
+- [Monitoring Documentation](scripts/monitoring/FILTERING_LOGIC.md)
+
+## 🐛 Known Issues & Limitations
+
+- **NLB Health Checks**: Require VPC internal access (security group rule must allow port 5439)
+- **Password Requirements**: Redshift passwords cannot contain @, ", /, \, or space characters
+- **Data Sharing**: Requires `PUBLICACCESSIBLE TRUE` flag on datashare creation
+- **Subnet Requirements**: Must have subnets in 3+ availability zones for Redshift Serverless
 
 ## 🤝 Contributing
 
-Contributions welcome! Please test changes in development environment before submitting PRs.
+This is a learning playground - feel free to experiment, break things, and learn!
