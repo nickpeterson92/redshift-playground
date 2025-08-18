@@ -29,6 +29,19 @@ data "terraform_remote_state" "redshift" {
   }
 }
 
+# Get public subnets from the VPC for test instances
+data "aws_subnets" "public" {
+  filter {
+    name   = "vpc-id"
+    values = [data.terraform_remote_state.redshift.outputs.vpc_id]
+  }
+  
+  filter {
+    name   = "tag:Type"
+    values = ["Public"]
+  }
+}
+
 # Get latest Amazon Linux 2023 AMI
 data "aws_ami" "amazon_linux" {
   most_recent = true

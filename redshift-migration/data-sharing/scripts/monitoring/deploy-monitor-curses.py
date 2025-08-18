@@ -29,7 +29,6 @@ PHASES = [
     {"name": "VPC Endpoints", "key": "vpc_endpoints", "icon": "🔌"},
     {"name": "Network Load Balancer", "key": "nlb", "icon": "⚖️"},
     {"name": "Target Registration", "key": "targets", "icon": "🎯"},
-    {"name": "Health Checks", "key": "health", "icon": "💚"},
 ]
 
 class CursesMonitor:
@@ -40,6 +39,7 @@ class CursesMonitor:
         
         # Config
         self.project_name = os.environ.get('PROJECT_NAME', 'airline')
+        self.environment = os.environ.get('ENVIRONMENT', 'dev')
         self.aws_region = os.environ.get('AWS_REGION', 'us-west-2')
         
         # Dynamically determine consumer count
@@ -66,6 +66,7 @@ class CursesMonitor:
             "subnet_azs": [],  # Track availability zones
             "producer_workgroup": None,
             "producer_status": None,
+            "consumer_namespaces": [],  # Track consumer namespace names
             "consumer_workgroups": [],
             "consumer_statuses": {},  # Track individual workgroup statuses
             "nlb": None,
@@ -252,36 +253,67 @@ class CursesMonitor:
             if not self.deployment_complete:
                 self.poll_indicator = (self.poll_indicator + 1) % 4
         
-        # Check VPC - but don't flip back to pending if we already marked it complete
-        with self.state_lock:
-            vpc_already_complete = self.phase_status.get("networking") == "complete"
+        # Check VPC - always check to track both creation and destruction
+        # Look for VPC by multiple methods:
+        # 1. Project tag matches our project
+        # 2. Name contains our project name
+        # 3. Standard naming convention (redshift-vpc-{env})
+        vpcs = self.run_aws_command(
+            "ec2", "describe-vpcs",
+            f"Vpcs[?Tags[?(Key=='Project' && Value=='{self.project_name}') || (Key=='Name' && (contains(Value, '{self.project_name}') || Value=='redshift-vpc-{self.environment}'))]].[VpcId,CidrBlock]"
+        )
         
-        if not vpc_already_complete:
-            # Only check VPC if we haven't already confirmed it exists
-            vpcs = self.run_aws_command(
-                "ec2", "describe-vpcs",
-                f"Vpcs[?Tags[?Key=='Name' && contains(Value, '{self.project_name}')]].[VpcId,CidrBlock]"
-            )
+        if vpcs and len(vpcs) > 0:
+            vpc_id = vpcs[0][0]
+            vpc_cidr = vpcs[0][1] if len(vpcs[0]) > 1 else None
             
-            if vpcs and len(vpcs) > 0:
-                vpc_id = vpcs[0][0]
-                vpc_cidr = vpcs[0][1] if len(vpcs[0]) > 1 else None
-                
+            with self.state_lock:
+                self.resources["vpc"] = vpc_id
+                self.resources["vpc_cidr"] = vpc_cidr
+                self._set_phase_status_unsafe("networking", "complete")
+                self._set_phase_status_unsafe("security", "complete")
+            
+            # Get project-specific subnets with AZ info
+            subnets = self.run_aws_command(
+                "ec2", "describe-subnets",
+                f"Subnets[?VpcId=='{vpc_id}'].[SubnetId,AvailabilityZone,CidrBlock]"
+            )
+            if subnets:
                 with self.state_lock:
-                    self.resources["vpc"] = vpc_id
-                    self.resources["vpc_cidr"] = vpc_cidr
-                self.set_phase_status("networking", "complete")
-                self.set_phase_status("security", "complete")
-                
-                # Get project-specific subnets with AZ info
-                subnets = self.run_aws_command(
-                    "ec2", "describe-subnets",
-                    f"Subnets[?VpcId=='{vpc_id}'].[SubnetId,AvailabilityZone,CidrBlock]"
+                    self.resources["subnets"] = [s[0] for s in subnets[:3]]
+                    self.resources["subnet_azs"] = [s[1] for s in subnets[:3] if len(s) > 1]
+            
+            # Optional: Check for bootstrap infrastructure (if using bootstrap deployment)
+            # These are informational only - not required for data-sharing deployment
+            try:
+                nat_gateways = self.run_aws_command(
+                    "ec2", "describe-nat-gateways",
+                    f"NatGateways[?VpcId=='{vpc_id}' && State=='available'].[NatGatewayId]"
                 )
-                if subnets:
+                if nat_gateways:
                     with self.state_lock:
-                        self.resources["subnets"] = [s[0] for s in subnets[:3]]
-                        self.resources["subnet_azs"] = [s[1] for s in subnets[:3] if len(s) > 1]
+                        self.resources["nat_gateways"] = len(nat_gateways)
+            except:
+                pass  # NAT gateways are optional (could be using VPC endpoints or public subnets)
+        else:
+            # VPC doesn't exist or was destroyed
+            with self.state_lock:
+                # Clear VPC-related resources
+                self.resources["vpc"] = None
+                self.resources["vpc_cidr"] = None
+                self.resources["subnets"] = []
+                self.resources["subnet_azs"] = []
+                self.resources["nat_gateways"] = 0
+                
+                # Mark networking as pending if not already complete or if it was destroyed
+                if self.phase_status.get("networking") == "complete":
+                    # VPC was destroyed after being created
+                    self._set_phase_status_unsafe("networking", "destroyed")
+                    self._set_phase_status_unsafe("security", "destroyed")
+                else:
+                    # VPC hasn't been created yet
+                    self._set_phase_status_unsafe("networking", "pending")
+                    self._set_phase_status_unsafe("security", "pending")
         
         # Check workgroups
         workgroups = self.run_aws_command(
@@ -296,8 +328,10 @@ class CursesMonitor:
                 # Count available and creating workgroups
                 total_available = 0
                 total_creating = 0
+                total_deleting = 0
                 
                 # Clear resources first to rebuild accurately
+                self.resources["consumer_namespaces"] = []  # Will populate from workgroup names
                 self.resources["consumer_workgroups"] = []
                 self.resources["consumer_statuses"] = {}
                 self.resources["producer_workgroup"] = None
@@ -310,28 +344,36 @@ class CursesMonitor:
                             self.resources["producer_workgroup"] = wg_name
                             self.resources["producer_status"] = status
                         else:
+                            # It's a consumer workgroup
+                            self.resources["consumer_statuses"][wg_name] = status
                             if status == "AVAILABLE":
                                 self.resources["consumer_workgroups"].append(wg_name)
-                            self.resources["consumer_statuses"][wg_name] = status
+                                # Derive namespace name from workgroup name (replace -wg with -ns)
+                                ns_name = wg_name.replace('-wg-', '-ns-').replace('-wg', '-ns')
+                                if ns_name not in self.resources["consumer_namespaces"]:
+                                    self.resources["consumer_namespaces"].append(ns_name)
                         
                         # Count status for project workgroups only
                         if status == "AVAILABLE":
                             total_available += 1
                         elif status in ["CREATING", "MODIFYING"]:
-                            total_creating += 1
+                            total_creating += 1  # Count MODIFYING as "in progress"
+                        elif status in ["DELETING", "DELETED"]:
+                            total_deleting += 1
                 
                 # Track workgroup completion status
                 expected_total = self.consumer_count + 1  # consumers + producer
                 
-                # If workgroups exist, VPC and security must be complete (and stay complete)
-                if total_available > 0 or total_creating > 0:
-                    # VPC and Security Groups must exist for workgroups to be created
-                    self._set_phase_status_unsafe("networking", "complete")
-                    self._set_phase_status_unsafe("security", "complete")
-                    if not self.resources.get("vpc"):
-                        self.resources["vpc"] = "inferred-from-workgroups"  # Mark as exists even if we can't find it
-                
-                if total_available >= expected_total:
+                if total_deleting > 0:
+                    # Resources are being deleted
+                    if self.resources.get("producer_status") in ["DELETING", "DELETED"]:
+                        self._set_phase_status_unsafe("producer_workgroup", "destroyed")
+                        self._set_phase_status_unsafe("producer_namespace", "destroyed")
+                    
+                    if any(s in ["DELETING", "DELETED"] for s in self.resources.get("consumer_statuses", {}).values()):
+                        self._set_phase_status_unsafe("consumer_workgroups", "destroyed")
+                        self._set_phase_status_unsafe("consumer_namespaces", "destroyed")
+                elif total_available >= expected_total:
                     # All workgroups are available
                     self._set_phase_status_unsafe("producer_namespace", "complete")
                     self._set_phase_status_unsafe("producer_workgroup", "complete")
@@ -353,6 +395,10 @@ class CursesMonitor:
                             elif status == "AVAILABLE":
                                 self._set_phase_status_unsafe("producer_namespace", "complete")
                                 self._set_phase_status_unsafe("producer_workgroup", "complete")
+                            elif status == "MODIFYING":
+                                # Workgroup is being modified (e.g., snapshot restore) - namespace must exist
+                                self._set_phase_status_unsafe("producer_namespace", "complete")
+                                self._set_phase_status_unsafe("producer_workgroup", "in_progress")
                         else:
                             # It's a consumer workgroup
                             if status == "CREATING":
@@ -360,6 +406,9 @@ class CursesMonitor:
                                 self._set_phase_status_unsafe("consumer_namespaces", "complete")
                             elif status == "AVAILABLE":
                                 consumer_available += 1
+                                self._set_phase_status_unsafe("consumer_namespaces", "complete")
+                            elif status == "MODIFYING":
+                                consumer_creating += 1  # Count as in-progress
                                 self._set_phase_status_unsafe("consumer_namespaces", "complete")
                     
                     # Set consumer workgroup status based on actual state
@@ -373,8 +422,8 @@ class CursesMonitor:
                         # Some available but not all = in progress
                         self._set_phase_status_unsafe("consumer_workgroups", "in_progress")
         
-        # Check VPC Endpoints if workgroups are complete
-        if self.phase_status["consumer_workgroups"] == "complete":
+        # Check VPC Endpoints if workgroups are complete or destroyed
+        if self.phase_status["consumer_workgroups"] in ["complete", "destroyed"]:
             endpoints = self.run_aws_command(
                 "redshift-serverless", "list-endpoint-access",
                 "endpoints[*].[endpointName,endpointStatus,address]"
@@ -384,6 +433,7 @@ class CursesMonitor:
                 with self.state_lock:
                     active_endpoints = 0
                     creating_endpoints = 0
+                    deleting_endpoints = 0
                     self.resources["vpc_endpoints"] = []
                     self.resources["endpoint_statuses"] = {}
                     
@@ -404,18 +454,25 @@ class CursesMonitor:
                                 self.resources["vpc_endpoints"].append(ep_name)
                             elif status == "CREATING":
                                 creating_endpoints += 1
+                            elif status in ["DELETING", "DELETED"]:
+                                deleting_endpoints += 1
                     
-                    if creating_endpoints > 0:
+                    if deleting_endpoints > 0:
+                        self._set_phase_status_unsafe("vpc_endpoints", "destroyed")
+                    elif creating_endpoints > 0:
                         self._set_phase_status_unsafe("vpc_endpoints", "in_progress")
                     elif active_endpoints >= self.consumer_count:
                         self._set_phase_status_unsafe("vpc_endpoints", "complete")
                     else:
-                        # If we have workgroups but no endpoints, mark as pending
-                        self._set_phase_status_unsafe("vpc_endpoints", "pending")
+                        # If we have workgroups but no endpoints, mark as pending or destroyed
+                        if self.phase_status["consumer_workgroups"] == "destroyed":
+                            self._set_phase_status_unsafe("vpc_endpoints", "destroyed")
+                        else:
+                            self._set_phase_status_unsafe("vpc_endpoints", "pending")
         
-        # Check NLB only after endpoints are complete
+        # Check NLB only after endpoints are complete or destroyed
         with self.state_lock:
-            check_nlb = self.phase_status["vpc_endpoints"] == "complete"
+            check_nlb = self.phase_status["vpc_endpoints"] in ["complete", "destroyed"]
         
         if check_nlb:
             # Try exact name first, then contains
@@ -445,76 +502,92 @@ class CursesMonitor:
                     elif nlb_state in ["provisioning", "active_impaired"]:
                         self.resources["nlb"] = nlb_state
                         self._set_phase_status_unsafe("nlb", "in_progress")
-                
-                # Check targets - try exact name first (moved outside lock)
+                    elif nlb_state == "deleting":
+                        self.resources["nlb"] = "deleting"
+                        self._set_phase_status_unsafe("nlb", "destroyed")
+            else:
+                # NLB doesn't exist
+                with self.state_lock:
+                    if self.phase_status.get("nlb") == "complete":
+                        # NLB was destroyed after being created
+                        self._set_phase_status_unsafe("nlb", "destroyed")
+                        self._set_phase_status_unsafe("targets", "destroyed")
+                        self.resources["nlb"] = None
+                        self.resources["nlb_state"] = None
+                        self.resources["nlb_dns"] = None
+            
+            # Check targets - try exact name first (moved outside lock)
+            tgs = self.run_aws_command(
+                "elbv2", "describe-target-groups",
+                f"TargetGroups[?TargetGroupName=='{self.project_name}-consumers'].[TargetGroupArn]"
+            )
+            
+            
+            if not tgs:
+                # Fallback to contains search
                 tgs = self.run_aws_command(
                     "elbv2", "describe-target-groups",
-                    f"TargetGroups[?TargetGroupName=='{self.project_name}-redshift-tg'].[TargetGroupArn]"
+                    f"TargetGroups[?contains(TargetGroupName, '{self.project_name}')].[TargetGroupArn]"
                 )
+            
+            if tgs and len(tgs) > 0:
+                # Pass the ARN correctly to describe-target-health
+                health_cmd = [
+                    "aws", "elbv2", "describe-target-health",
+                    "--target-group-arn", tgs[0][0],
+                    "--region", self.aws_region,
+                    "--output", "json"
+                ]
+                health_result = subprocess.run(health_cmd, capture_output=True, text=True, timeout=10)
                 
-                if not tgs:
-                    # Fallback to contains search
-                    tgs = self.run_aws_command(
-                        "elbv2", "describe-target-groups",
-                        f"TargetGroups[?contains(TargetGroupName, '{self.project_name}')].[TargetGroupArn]"
-                    )
-                
-                if tgs and len(tgs) > 0:
-                    # Pass the ARN correctly to describe-target-health
-                    health_cmd = [
-                        "aws", "elbv2", "describe-target-health",
-                        "--target-group-arn", tgs[0][0],
-                        "--output", "json"
-                    ]
-                    health_result = subprocess.run(health_cmd, capture_output=True, text=True, timeout=5)
-                    
-                    if health_result.returncode == 0 and health_result.stdout:
-                        try:
-                            health = json.loads(health_result.stdout)
-                            if "TargetHealthDescriptions" in health:
-                                targets = health["TargetHealthDescriptions"]
-                                
-                                # Count target states for more granular feedback
-                                state_counts = {
-                                    "healthy": 0,
-                                    "initial": 0,
-                                    "unhealthy": 0,
-                                    "draining": 0,
-                                    "unavailable": 0
-                                }
-                                
-                                for t in targets:
-                                    state = t.get("TargetHealth", {}).get("State", "unknown")
-                                    state_counts[state] = state_counts.get(state, 0) + 1
-                                
-                                healthy = state_counts["healthy"]
-                                initial = state_counts["initial"]
-                                total = len(targets)
-                                
+                if health_result.returncode == 0 and health_result.stdout:
+                    try:
+                        health = json.loads(health_result.stdout)
+                        if "TargetHealthDescriptions" in health:
+                            targets = health["TargetHealthDescriptions"]
+                            
+                            # Count target states for more granular feedback
+                            state_counts = {
+                                "healthy": 0,
+                                "initial": 0,
+                                "unhealthy": 0,
+                                "draining": 0,
+                                "unavailable": 0
+                            }
+                            
+                            for t in targets:
+                                state = t.get("TargetHealth", {}).get("State", "unknown")
+                                state_counts[state] = state_counts.get(state, 0) + 1
+                            
+                            healthy = state_counts["healthy"]
+                            initial = state_counts["initial"]
+                            total = len(targets)
+                            
+                            with self.state_lock:
+                                self.resources["healthy_targets"] = healthy
+                                self.resources["total_targets"] = total
+                                self.resources["target_states"] = state_counts
+                            
+                            # Check if all targets are healthy (3 per consumer for multi-AZ)
+                            expected_targets = self.consumer_count * 3
+                            
+                            if healthy >= expected_targets:
+                                self.set_phase_status("targets", "complete")
+                                self.set_phase_status("health", "complete")
                                 with self.state_lock:
-                                    self.resources["healthy_targets"] = healthy
-                                    self.resources["total_targets"] = total
-                                    self.resources["target_states"] = state_counts
-                                
-                                # Check if all targets are healthy (3 per consumer for multi-AZ)
-                                expected_targets = self.consumer_count * 3
-                                if healthy >= expected_targets:
-                                    self.set_phase_status("targets", "complete")
-                                    self.set_phase_status("health", "complete")
-                                    with self.state_lock:
-                                        self.deployment_complete = True
-                                elif total > 0:
-                                    # Targets are registering or health checking
-                                    self.set_phase_status("targets", "in_progress")
-                                    if healthy > 0 or initial > 0:
-                                        self.set_phase_status("health", "in_progress")
-                        except:
-                            pass
-                else:
-                    # If NLB is active but no target group found, mark as in progress
-                    with self.state_lock:
-                        if self.resources.get("nlb") == "active":
-                            self._set_phase_status_unsafe("targets", "in_progress")
+                                    self.deployment_complete = True
+                            elif total > 0:
+                                # Targets are registering or health checking
+                                self.set_phase_status("targets", "in_progress")
+                                if healthy > 0 or initial > 0:
+                                    self.set_phase_status("health", "in_progress")
+                    except:
+                        pass
+            else:
+                # If NLB is active but no target group found, mark as in progress
+                with self.state_lock:
+                    if self.resources.get("nlb") == "active":
+                        self._set_phase_status_unsafe("targets", "in_progress")
         
         # Update current phase - find what's actually IN PROGRESS
         with self.state_lock:
@@ -778,7 +851,7 @@ class CursesMonitor:
                 y = 1
                 
                 # Header
-                header = "⚡ REDSHIFT SERVERLESS DEPLOYMENT MONITOR ⚡"
+                header = "⚡ REDSHIFT INFRASTRUCTURE MONITOR ⚡"
                 x = (width - len(header)) // 2
                 stdscr.attron(curses.color_pair(4) | curses.A_BOLD)
                 stdscr.addstr(y, x, header)
@@ -901,11 +974,15 @@ class CursesMonitor:
                 stdscr.addstr(f"] {pct}%")
                 y += 2
                 
-                # Phases
-                stdscr.addstr(y, 2, "DEPLOYMENT PHASES")
+                # Phases with enhanced header
+                stdscr.attron(curses.color_pair(4) | curses.A_BOLD)
+                stdscr.addstr(y, 2, "INFRASTRUCTURE RESOURCES")
                 stdscr.addstr(y, 45, "RESOURCE DETAILS")
+                stdscr.attroff(curses.color_pair(4) | curses.A_BOLD)
                 y += 1
-                stdscr.addstr(y, 2, "─" * (width - 4))
+                stdscr.attron(curses.color_pair(5) | curses.A_DIM)
+                stdscr.addstr(y, 2, "═" * (width - 4))  # Double line for better separation
+                stdscr.attroff(curses.color_pair(5) | curses.A_DIM)
                 y += 1
                 
                 for i, phase in enumerate(PHASES):
@@ -913,44 +990,94 @@ class CursesMonitor:
                     
                     # Phase status with better indicators
                     if status == "complete":
-                        stdscr.attron(curses.color_pair(2))
+                        stdscr.attron(curses.color_pair(2) | curses.A_BOLD)
                         stdscr.addstr(y + i, 2, "✓")
-                        stdscr.attroff(curses.color_pair(2))
+                        stdscr.attroff(curses.color_pair(2) | curses.A_BOLD)
+                        stdscr.attron(curses.color_pair(2))
                         stdscr.addstr(y + i, 4, f" {phase['name']}")
+                        stdscr.attroff(curses.color_pair(2))
                     elif status == "in_progress":
                         # Highlight in-progress phases more clearly
                         stdscr.attron(curses.color_pair(3) | curses.A_BOLD)
                         stdscr.addstr(y + i, 2, "⟳")
-                        stdscr.addstr(y + i, 4, f" {phase['name']}")
-                        stdscr.addstr(y + i, 30, " ← IN PROGRESS")
                         stdscr.attroff(curses.color_pair(3) | curses.A_BOLD)
+                        stdscr.attron(curses.color_pair(3))
+                        stdscr.addstr(y + i, 4, f" {phase['name']}")
+                        stdscr.attroff(curses.color_pair(3))
+                        stdscr.attron(curses.color_pair(3) | curses.A_BOLD | curses.A_BLINK)
+                        stdscr.addstr(y + i, 30, " ← IN PROGRESS")
+                        stdscr.attroff(curses.color_pair(3) | curses.A_BOLD | curses.A_BLINK)
+                    elif status == "destroyed":
+                        # Show destroyed resources with dimming
+                        stdscr.attron(curses.color_pair(1) | curses.A_BOLD)
+                        stdscr.addstr(y + i, 2, "✗")
+                        stdscr.attroff(curses.color_pair(1) | curses.A_BOLD)
+                        stdscr.attron(curses.color_pair(1) | curses.A_DIM)
+                        stdscr.addstr(y + i, 4, f" {phase['name']}")
+                        stdscr.addstr(y + i, 30, " DESTROYED")
+                        stdscr.attroff(curses.color_pair(1) | curses.A_DIM)
                     else:
-                        stdscr.attron(curses.color_pair(5))  # Dim for pending
+                        stdscr.attron(curses.color_pair(5) | curses.A_DIM)  # Extra dim for pending
                         stdscr.addstr(y + i, 2, "○")
                         stdscr.addstr(y + i, 4, f" {phase['name']}")
-                        stdscr.attroff(curses.color_pair(5))
+                        stdscr.attroff(curses.color_pair(5) | curses.A_DIM)
                     
                     # Resources column with more details
                     if i == 0:  # VPC & Networking
                         if resources.get('vpc'):
-                            vpc_info = f"VPC: {resources['vpc'][-12:]}"
+                            stdscr.attron(curses.color_pair(7))  # Blue
+                            stdscr.addstr(y + i, 45, "VPC: ")
+                            stdscr.attroff(curses.color_pair(7))
+                            stdscr.attron(curses.A_BOLD)
+                            stdscr.addstr(resources['vpc'][-12:])
+                            stdscr.attroff(curses.A_BOLD)
                             if resources.get('vpc_cidr'):
-                                vpc_info += f" ({resources['vpc_cidr']})"
-                            stdscr.addstr(y + i, 45, vpc_info[:35])
+                                stdscr.attron(curses.color_pair(5))
+                                stdscr.addstr(f" ({resources['vpc_cidr']})") 
+                                stdscr.attroff(curses.color_pair(5))
+                        elif status == "destroyed":
+                            stdscr.attron(curses.color_pair(1))
+                            stdscr.addstr(y + i, 45, "VPC: ✗ Destroyed")
+                            stdscr.attroff(curses.color_pair(1))
                         else:
                             stdscr.addstr(y + i, 45, "VPC: ○ Pending")
                     elif i == 1:  # Security Groups
-                        if resources.get('subnet_azs'):
+                        if status == "destroyed":
+                            stdscr.attron(curses.color_pair(1))
+                            stdscr.addstr(y + i, 45, "Security: ✗ Destroyed")
+                            stdscr.attroff(curses.color_pair(1))
+                        elif resources.get('subnet_azs'):
+                            stdscr.attron(curses.color_pair(7))  # Blue
+                            stdscr.addstr(y + i, 45, "AZs: ")
+                            stdscr.attroff(curses.color_pair(7))
                             azs = ', '.join(resources['subnet_azs'])
-                            stdscr.addstr(y + i, 45, f"AZs: {azs[:30]}")
+                            stdscr.attron(curses.A_BOLD)
+                            stdscr.addstr(azs[:30])
+                            stdscr.attroff(curses.A_BOLD)
+                            # Add NAT gateway count if bootstrap infrastructure exists
+                            if resources.get('nat_gateways'):
+                                stdscr.addstr(" | ")
+                                stdscr.attron(curses.color_pair(6) | curses.A_BOLD)  # Magenta
+                                stdscr.addstr(f"NAT: {resources['nat_gateways']}")
+                                stdscr.attroff(curses.color_pair(6) | curses.A_BOLD)
                     elif i == 2:  # Producer namespace
                         # Show namespace info - namespaces are created before workgroups
                         if phase_status.get('producer_namespace') == 'complete':
-                            stdscr.attron(curses.color_pair(2))
-                            stdscr.addstr(y + i, 45, f"Namespace: ✓ {self.project_name}-producer-ns")
-                            stdscr.attroff(curses.color_pair(2))
+                            stdscr.attron(curses.color_pair(7))  # Blue
+                            stdscr.addstr(y + i, 45, "Namespace: ")
+                            stdscr.attroff(curses.color_pair(7))
+                            stdscr.attron(curses.A_BOLD)
+                            stdscr.addstr(f"{self.project_name}-producer-ns")
+                            stdscr.attroff(curses.A_BOLD)
+                        elif phase_status.get('producer_namespace') == 'destroyed':
+                            stdscr.attron(curses.color_pair(1))
+                            stdscr.addstr(y + i, 45, "Namespace: ✗ Destroyed")
+                            stdscr.attroff(curses.color_pair(1))
                         else:
-                            stdscr.addstr(y + i, 45, "Namespace: ○ Pending")
+                            stdscr.attron(curses.color_pair(7))  # Blue
+                            stdscr.addstr(y + i, 45, "Namespace: ")
+                            stdscr.attroff(curses.color_pair(7))
+                            stdscr.addstr("○ Pending")
                     elif i == 3:  # Producer workgroup
                         if resources.get('producer_workgroup'):
                             prod_status = resources.get('producer_status', 'Unknown')
@@ -962,112 +1089,250 @@ class CursesMonitor:
                                 display_name = "..." + wg_name[-27:]
                             
                             if prod_status == "AVAILABLE":
-                                stdscr.attron(curses.color_pair(2))
-                                stdscr.addstr(y + i, 45, f"Workgroup: ✓ {display_name}")
-                                stdscr.attroff(curses.color_pair(2))
+                                stdscr.attron(curses.color_pair(7))  # Blue
+                                stdscr.addstr(y + i, 45, "Workgroup: ")
+                                stdscr.attroff(curses.color_pair(7))
+                                stdscr.attron(curses.A_BOLD)
+                                stdscr.addstr(display_name)
+                                stdscr.attroff(curses.A_BOLD)
                             elif prod_status in ["DELETING", "DELETED"]:
                                 stdscr.attron(curses.color_pair(1))
-                                stdscr.addstr(y + i, 45, f"Workgroup: ○ {prod_status}")
+                                stdscr.addstr(y + i, 45, f"Workgroup: ✗ {prod_status}")
                                 stdscr.attroff(curses.color_pair(1))
+                            elif prod_status == "MODIFYING":
+                                stdscr.attron(curses.color_pair(7))  # Blue
+                                stdscr.addstr(y + i, 45, "Workgroup: ")
+                                stdscr.attroff(curses.color_pair(7))
+                                stdscr.attron(curses.color_pair(3) | curses.A_BOLD)
+                                stdscr.addstr("MODIFYING")
+                                stdscr.attroff(curses.color_pair(3) | curses.A_BOLD)
                             else:
                                 stdscr.attron(curses.color_pair(3))
                                 stdscr.addstr(y + i, 45, f"Workgroup: ⟳ {prod_status}")
                                 stdscr.attroff(curses.color_pair(3))
+                        elif phase_status.get('producer_workgroup') == 'destroyed':
+                            stdscr.attron(curses.color_pair(1))
+                            stdscr.addstr(y + i, 45, "Workgroup: ✗ Destroyed")
+                            stdscr.attroff(curses.color_pair(1))
                         else:
-                            stdscr.addstr(y + i, 45, "Workgroup: ○ Pending")
+                            stdscr.attron(curses.color_pair(7))  # Blue
+                            stdscr.addstr(y + i, 45, "Workgroup: ")
+                            stdscr.attroff(curses.color_pair(7))
+                            stdscr.addstr("○ Pending")
                     elif i == 4:  # Consumer namespaces
-                        # Show namespace status
+                        # Show namespace status with actual example
                         if phase_status.get('consumer_namespaces') == 'complete':
-                            stdscr.attron(curses.color_pair(2))
-                            stdscr.addstr(y + i, 45, f"Namespaces: ✓ {self.consumer_count} created")
-                            stdscr.attroff(curses.color_pair(2))
+                            stdscr.attron(curses.color_pair(7))  # Blue
+                            stdscr.addstr(y + i, 45, "Namespaces: ")
+                            stdscr.attroff(curses.color_pair(7))
+                            stdscr.attron(curses.A_BOLD)
+                            stdscr.addstr(str(self.consumer_count))
+                            stdscr.attroff(curses.A_BOLD)
+                            # Show actual example namespace if we have one
+                            if resources.get('consumer_namespaces') and len(resources['consumer_namespaces']) > 0:
+                                first_ns = resources['consumer_namespaces'][0]
+                                if len(first_ns) <= 25:
+                                    example_ns = f" ({first_ns})"
+                                else:
+                                    example_ns = f" (...{first_ns[-22:]})"
+                                stdscr.attron(curses.color_pair(5))
+                                stdscr.addstr(example_ns)
+                                stdscr.attroff(curses.color_pair(5))
+                        elif phase_status.get('consumer_namespaces') == 'destroyed':
+                            stdscr.attron(curses.color_pair(1))
+                            stdscr.addstr(y + i, 45, f"Namespaces: ✗ Destroyed")
+                            stdscr.attroff(curses.color_pair(1))
                         else:
-                            stdscr.addstr(y + i, 45, f"Namespaces: ○ 0/{self.consumer_count}")
+                            stdscr.attron(curses.color_pair(7))  # Blue
+                            stdscr.addstr(y + i, 45, "Namespaces: ")
+                            stdscr.attroff(curses.color_pair(7))
+                            stdscr.addstr(f"○ 0/{self.consumer_count}")
                     elif i == 5:  # Consumer workgroups
-                        consumer_statuses = resources.get('consumer_statuses', {})
-                        available_count = sum(1 for s in consumer_statuses.values() if s == "AVAILABLE")
-                        creating_count = sum(1 for s in consumer_statuses.values() if s == "CREATING")
-                        
-                        # Get an example consumer workgroup name if available
-                        example_name = ""
-                        if resources.get('consumer_workgroups') and len(resources['consumer_workgroups']) > 0:
-                            first_consumer = resources['consumer_workgroups'][0]
-                            if len(first_consumer) <= 20:
-                                example_name = f" ({first_consumer})"
-                            else:
-                                example_name = f" (...{first_consumer[-17:]})"
-                        
-                        if creating_count > 0:
-                            stdscr.attron(curses.color_pair(3))
-                            stdscr.addstr(y + i, 45, f"Workgroups: {available_count}/{self.consumer_count} (⟳ {creating_count})")
-                            stdscr.attroff(curses.color_pair(3))
-                        elif available_count > 0:
-                            color = 2 if available_count == self.consumer_count else 5
-                            stdscr.attron(curses.color_pair(color))
-                            display_text = f"Workgroups: {available_count}/{self.consumer_count}"
-                            if example_name and len(display_text + example_name) < 45:
-                                display_text += example_name
-                            stdscr.addstr(y + i, 45, display_text)
-                            stdscr.attroff(curses.color_pair(color))
+                        if phase_status.get('consumer_workgroups') == 'destroyed':
+                            stdscr.attron(curses.color_pair(1))
+                            stdscr.addstr(y + i, 45, "Workgroups: ✗ Destroyed")
+                            stdscr.attroff(curses.color_pair(1))
                         else:
-                            stdscr.addstr(y + i, 45, f"Workgroups: 0/{self.consumer_count}")
-                    elif i == 6:  # VPC Endpoints
-                        endpoint_count = len(resources.get('vpc_endpoints', []))
-                        endpoint_statuses = resources.get('endpoint_statuses', {})
-                        creating = sum(1 for e in endpoint_statuses.values() if e.get('status') == 'CREATING')
-                        
-                        if creating > 0:
-                            stdscr.attron(curses.color_pair(3))
-                            stdscr.addstr(y + i, 45, f"Endpoints: {endpoint_count}/{self.consumer_count} (⟳ {creating} creating)")
-                            stdscr.attroff(curses.color_pair(3))
-                        elif endpoint_count > 0:
-                            color = 2 if endpoint_count >= self.consumer_count else 5
-                            stdscr.attron(curses.color_pair(color))
-                            stdscr.addstr(y + i, 45, f"Endpoints: {endpoint_count}/{self.consumer_count}")
-                            stdscr.attroff(curses.color_pair(color))
-                        else:
-                            stdscr.addstr(y + i, 45, f"Endpoints: 0/{self.consumer_count}")
-                    elif i == 7:  # NLB
-                        nlb_state = resources.get('nlb_state', '')
-                        if nlb_state == 'active':
-                            stdscr.attron(curses.color_pair(2))
-                            nlb_display = "NLB: ✓ Active"
-                            if resources.get('nlb_dns'):
-                                # Show last part of DNS name
-                                dns_suffix = resources['nlb_dns'].split('.')[0][-20:]
-                                nlb_display += f" ({dns_suffix}...)"
-                            stdscr.addstr(y + i, 45, nlb_display[:35])
-                            stdscr.attroff(curses.color_pair(2))
-                        elif nlb_state in ['provisioning', 'active_impaired']:
-                            stdscr.attron(curses.color_pair(3))
-                            stdscr.addstr(y + i, 45, f"NLB: ⟳ {nlb_state}")
-                            stdscr.attroff(curses.color_pair(3))
-                        else:
-                            stdscr.addstr(y + i, 45, "NLB: ○ Pending")
-                    elif i == 8:
-                        # Each consumer has 3 IPs (one per AZ), so total targets = consumers * 3
-                        expected_targets = self.consumer_count * 3
-                        target_states = resources.get('target_states', {})
-                        
-                        # Show detailed target status
-                        if resources.get('total_targets', 0) > 0:
-                            healthy = target_states.get('healthy', 0)
-                            initial = target_states.get('initial', 0)
+                            consumer_statuses = resources.get('consumer_statuses', {})
+                            available_count = sum(1 for s in consumer_statuses.values() if s == "AVAILABLE")
+                            creating_count = sum(1 for s in consumer_statuses.values() if s in ["CREATING", "MODIFYING"])
+                            deleting_count = sum(1 for s in consumer_statuses.values() if s in ["DELETING", "DELETED"])
                             
-                            if healthy == expected_targets:
-                                stdscr.attron(curses.color_pair(2))
-                                stdscr.addstr(y + i, 45, f"Targets: ✓ {healthy}/{expected_targets} healthy")
-                                stdscr.attroff(curses.color_pair(2))
-                            elif initial > 0:
-                                stdscr.attron(curses.color_pair(3))
-                                stdscr.addstr(y + i, 45, f"Targets: ⟳ {healthy} healthy, {initial} registering...")
-                                stdscr.attroff(curses.color_pair(3))
+                            # Get an example consumer workgroup name if available
+                            example_name = ""
+                            if resources.get('consumer_workgroups') and len(resources['consumer_workgroups']) > 0:
+                                first_consumer = resources['consumer_workgroups'][0]
+                                if len(first_consumer) <= 20:
+                                    example_name = f" ({first_consumer})"
+                                else:
+                                    example_name = f" (...{first_consumer[-17:]})"
+                            
+                            if deleting_count > 0:
+                                stdscr.attron(curses.color_pair(1))
+                                stdscr.addstr(y + i, 45, f"Workgroups: ✗ {deleting_count} deleting")
+                                stdscr.attroff(curses.color_pair(1))
+                            elif creating_count > 0:
+                                stdscr.attron(curses.color_pair(7))  # Blue
+                                stdscr.addstr(y + i, 45, "Workgroups: ")
+                                stdscr.attroff(curses.color_pair(7))
+                                stdscr.attron(curses.A_BOLD)
+                                stdscr.addstr(f"{available_count}/{self.consumer_count}")
+                                stdscr.attroff(curses.A_BOLD)
+                            elif available_count > 0:
+                                stdscr.attron(curses.color_pair(7))  # Blue label
+                                stdscr.addstr(y + i, 45, "Workgroups: ")
+                                stdscr.attroff(curses.color_pair(7))
+                                stdscr.attron(curses.A_BOLD)
+                                stdscr.addstr(f"{available_count}/{self.consumer_count}")
+                                stdscr.attroff(curses.A_BOLD)
+                                if example_name:
+                                    stdscr.attron(curses.color_pair(5))
+                                    stdscr.addstr(example_name[:35])  # Show up to 35 chars
+                                    stdscr.attroff(curses.color_pair(5))
                             else:
-                                stdscr.addstr(y + i, 45, f"Targets: {healthy}/{expected_targets} healthy")
+                                stdscr.attron(curses.color_pair(7))  # Blue
+                                stdscr.addstr(y + i, 45, "Workgroups: ")
+                                stdscr.attroff(curses.color_pair(7))
+                                stdscr.attron(curses.A_BOLD)
+                                stdscr.addstr(f"0/{self.consumer_count}")
+                                stdscr.attroff(curses.A_BOLD)
+                    elif i == 6:  # VPC Endpoints
+                        if phase_status.get('vpc_endpoints') == 'destroyed':
+                            stdscr.attron(curses.color_pair(1))
+                            stdscr.addstr(y + i, 45, "Endpoints: ✗ Destroyed")
+                            stdscr.attroff(curses.color_pair(1))
                         else:
-                            stdscr.addstr(y + i, 45, f"Targets: {resources['healthy_targets']}/{expected_targets}")
+                            endpoint_count = len(resources.get('vpc_endpoints', []))
+                            endpoint_statuses = resources.get('endpoint_statuses', {})
+                            creating = sum(1 for e in endpoint_statuses.values() if e.get('status') == 'CREATING')
+                            deleting = sum(1 for e in endpoint_statuses.values() if e.get('status') in ['DELETING', 'DELETED'])
+                            
+                            if deleting > 0:
+                                stdscr.attron(curses.color_pair(1))
+                                stdscr.addstr(y + i, 45, f"Endpoints: ✗ {deleting} deleting")
+                                stdscr.attroff(curses.color_pair(1))
+                            elif creating > 0:
+                                stdscr.attron(curses.color_pair(7))  # Blue label
+                                stdscr.addstr(y + i, 45, "Endpoints: ")
+                                stdscr.attroff(curses.color_pair(7))
+                                stdscr.attron(curses.A_BOLD)
+                                stdscr.addstr(f"{endpoint_count}/{self.consumer_count}")
+                                stdscr.attroff(curses.A_BOLD)
+                                stdscr.attron(curses.color_pair(3))
+                                stdscr.addstr(f" (⟳ {creating} creating)")
+                                stdscr.attroff(curses.color_pair(3))
+                            elif endpoint_count > 0:
+                                stdscr.attron(curses.color_pair(7))  # Blue label
+                                stdscr.addstr(y + i, 45, "Endpoints: ")
+                                stdscr.attroff(curses.color_pair(7))
+                                stdscr.attron(curses.A_BOLD)
+                                stdscr.addstr(f"{endpoint_count}/{self.consumer_count}")
+                                stdscr.attroff(curses.A_BOLD)
+                            else:
+                                stdscr.attron(curses.color_pair(7))  # Blue
+                                stdscr.addstr(y + i, 45, "Endpoints: ")
+                                stdscr.attroff(curses.color_pair(7))
+                                stdscr.attron(curses.A_BOLD)
+                                stdscr.addstr(f"0/{self.consumer_count}")
+                                stdscr.attroff(curses.A_BOLD)
+                    elif i == 7:  # NLB
+                        if phase_status.get('nlb') == 'destroyed':
+                            stdscr.attron(curses.color_pair(1))
+                            stdscr.addstr(y + i, 45, "NLB: ✗ Destroyed")
+                            stdscr.attroff(curses.color_pair(1))
+                        else:
+                            nlb_state = resources.get('nlb_state', '')
+                            if nlb_state == 'active':
+                                stdscr.attron(curses.color_pair(7))  # Blue
+                                stdscr.addstr(y + i, 45, "NLB: ")
+                                stdscr.attroff(curses.color_pair(7))
+                                stdscr.attron(curses.A_BOLD)
+                                stdscr.addstr("Active")
+                                stdscr.attroff(curses.A_BOLD)
+                                if resources.get('nlb_dns'):
+                                    # Show last part of DNS name
+                                    dns_suffix = resources['nlb_dns'].split('.')[0][-20:]
+                                    stdscr.attron(curses.color_pair(4))
+                                    stdscr.addstr(f" ({dns_suffix}...)")
+                                    stdscr.attroff(curses.color_pair(4))
+                            elif nlb_state in ['provisioning', 'active_impaired']:
+                                stdscr.attron(curses.color_pair(3))
+                                stdscr.addstr(y + i, 45, f"NLB: ⟳ {nlb_state}")
+                                stdscr.attroff(curses.color_pair(3))
+                            elif nlb_state == 'deleting':
+                                stdscr.attron(curses.color_pair(1))
+                                stdscr.addstr(y + i, 45, "NLB: ✗ Deleting")
+                                stdscr.attroff(curses.color_pair(1))
+                            else:
+                                stdscr.attron(curses.color_pair(7))  # Blue
+                                stdscr.addstr(y + i, 45, "NLB: ")
+                                stdscr.attroff(curses.color_pair(7))
+                                stdscr.addstr("○ Pending")
+                    elif i == 8:
+                        if phase_status.get('targets') == 'destroyed':
+                            stdscr.attron(curses.color_pair(1))
+                            stdscr.addstr(y + i, 45, "Targets: ✗ Destroyed")
+                            stdscr.attroff(curses.color_pair(1))
+                        else:
+                            # Each consumer has 3 IPs (one per AZ), so total targets = consumers * 3
+                            expected_targets = self.consumer_count * 3
+                            target_states = resources.get('target_states', {})
+                            
+                            # Show detailed target status
+                            total_targets = resources.get('total_targets', 0)
+                            healthy_targets = resources.get('healthy_targets', 0)
+                            
+                            # Use either the detailed states or the simple healthy count
+                            if total_targets > 0 or healthy_targets > 0:
+                                healthy = target_states.get('healthy', 0) or healthy_targets
+                                initial = target_states.get('initial', 0)
+                                draining = target_states.get('draining', 0)
+                                # Make sure we have at least the basic count
+                                if healthy == 0 and healthy_targets > 0:
+                                    healthy = healthy_targets
+                                
+                                if draining > 0:
+                                    stdscr.attron(curses.color_pair(1))
+                                    stdscr.addstr(y + i, 45, f"Targets: ✗ {draining} draining")
+                                    stdscr.attroff(curses.color_pair(1))
+                                elif healthy == expected_targets:
+                                    stdscr.attron(curses.color_pair(7))  # Blue
+                                    stdscr.addstr(y + i, 45, "Targets: ")
+                                    stdscr.attroff(curses.color_pair(7))
+                                    stdscr.attron(curses.A_BOLD)
+                                    stdscr.addstr(f"{healthy}/{expected_targets}")
+                                    stdscr.attroff(curses.A_BOLD)
+                                    stdscr.addstr(" healthy")
+                                elif initial > 0:
+                                    stdscr.attron(curses.color_pair(3))
+                                    stdscr.addstr(y + i, 45, f"Targets: ⟳ {healthy} healthy, {initial} registering...")
+                                    stdscr.attroff(curses.color_pair(3))
+                                else:
+                                    stdscr.attron(curses.color_pair(7))  # Blue
+                                    stdscr.addstr(y + i, 45, "Targets: ")
+                                    stdscr.attroff(curses.color_pair(7))
+                                    stdscr.attron(curses.A_BOLD)
+                                    stdscr.addstr(f"{healthy}/{expected_targets}")
+                                    stdscr.attroff(curses.A_BOLD)
+                                    if healthy > 0:
+                                        stdscr.addstr(" healthy")
+                            else:
+                                # No targets data yet, show what we actually have
+                                stdscr.attron(curses.color_pair(7))  # Blue
+                                stdscr.addstr(y + i, 45, "Targets: ")
+                                stdscr.attroff(curses.color_pair(7))
+                                stdscr.attron(curses.A_BOLD)
+                                stdscr.addstr(f"{healthy_targets}/{expected_targets}")
+                                stdscr.attroff(curses.A_BOLD)
                 
                 y += len(PHASES) + 1
+                
+                # Footer separator
+                if y < height - 3:
+                    stdscr.attron(curses.color_pair(5) | curses.A_DIM)
+                    stdscr.addstr(y, 2, "─" * (width - 4))
+                    stdscr.attroff(curses.color_pair(5) | curses.A_DIM)
+                    y += 1
                 
                 # EKG at bottom
                 if y < height - 2:

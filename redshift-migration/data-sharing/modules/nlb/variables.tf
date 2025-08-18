@@ -31,3 +31,8 @@ variable "consumer_count" {
   description = "Number of consumers for target group attachments"
   type        = number
 }
+variable "tags" {
+  description = "Tags to apply to all resources"
+  type        = map(string)
+  default     = {}
+}

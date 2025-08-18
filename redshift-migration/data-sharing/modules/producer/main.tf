@@ -5,10 +5,13 @@
 resource "aws_kms_key" "redshift" {
   description = "KMS key for Redshift producer encryption"
   
-  tags = {
-    Name        = "${var.namespace_name}-kms"
-    Environment = var.environment
-  }
+  tags = merge(
+    var.tags,
+    {
+      Name        = "${var.namespace_name}-kms"
+      Environment = var.environment
+    }
+  )
 }
 
 resource "aws_kms_alias" "redshift" {
@@ -33,10 +36,13 @@ resource "aws_iam_role" "producer" {
     ]
   })
   
-  tags = {
-    Name        = "${var.namespace_name}-role"
-    Environment = var.environment
-  }
+  tags = merge(
+    var.tags,
+    {
+      Name        = "${var.namespace_name}-role"
+      Environment = var.environment
+    }
+  )
 }
 
 # S3 access for COPY/UNLOAD
@@ -73,18 +79,21 @@ resource "aws_redshiftserverless_namespace" "producer" {
   kms_key_id          = aws_kms_key.redshift.arn
   iam_roles           = [aws_iam_role.producer.arn]
 
-  tags = {
-    Name        = var.namespace_name
-    Environment = var.environment
-    Role        = "producer"
-    Project     = var.project
-  }
+  tags = merge(
+    var.tags,
+    {
+      Name        = var.namespace_name
+      Environment = var.environment
+      Role        = "producer"
+      Project     = var.project
+    }
+  )
 }
 
 # Redshift Serverless workgroup
 resource "aws_redshiftserverless_workgroup" "producer" {
   namespace_name = aws_redshiftserverless_namespace.producer.namespace_name
-  workgroup_name = "${var.namespace_name}-workgroup"
+  workgroup_name = "${var.namespace_name}-wg"
   
   # Compute configuration
   base_capacity = var.base_capacity
@@ -98,10 +107,13 @@ resource "aws_redshiftserverless_workgroup" "producer" {
   # Enhanced VPC routing for better performance
   enhanced_vpc_routing = true
   
-  tags = {
-    Name        = "${var.namespace_name}-workgroup"
-    Environment = var.environment
-    Role        = "producer"
-    Project     = var.project
-  }
+  tags = merge(
+    var.tags,
+    {
+      Name        = "${var.namespace_name}-wg"
+      Environment = var.environment
+      Role        = "producer"
+      Project     = var.project
+    }
+  )
 }

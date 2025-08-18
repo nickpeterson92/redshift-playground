@@ -6,7 +6,7 @@ resource "aws_instance" "test" {
   
   ami           = data.aws_ami.amazon_linux.id
   instance_type = var.instance_type
-  subnet_id     = data.terraform_remote_state.redshift.outputs.subnet_ids[count.index % length(data.terraform_remote_state.redshift.outputs.subnet_ids)]
+  subnet_id     = data.aws_subnets.public.ids[count.index % length(data.aws_subnets.public.ids)]
   key_name      = aws_key_pair.test_key.key_name
   
   vpc_security_group_ids = [aws_security_group.test_instance.id]

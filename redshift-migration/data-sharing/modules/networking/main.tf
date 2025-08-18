@@ -4,9 +4,12 @@
 data "aws_vpc" "existing" {
   count = var.create_vpc ? 0 : 1
   
-  tags = {
-    Name = var.vpc_name
-  }
+  tags = merge(
+    var.tags,
+    {
+      Name = var.vpc_name
+    }
+  )
 }
 
 resource "aws_vpc" "new" {
@@ -16,10 +19,13 @@ resource "aws_vpc" "new" {
   enable_dns_hostnames = true
   enable_dns_support   = true
 
-  tags = {
-    Name        = var.vpc_name
-    Environment = var.environment
-  }
+  tags = merge(
+    var.tags,
+    {
+      Name        = var.vpc_name
+      Environment = var.environment
+    }
+  )
 }
 
 locals {
@@ -40,19 +46,40 @@ resource "aws_subnet" "redshift" {
   availability_zone       = data.aws_availability_zones.available.names[count.index]
   map_public_ip_on_launch = true
 
-  tags = {
-    Name        = "${var.vpc_name}-subnet-${count.index + 1}"
-    Environment = var.environment
-  }
+  tags = merge(
+    var.tags,
+    {
+      Name        = "${var.vpc_name}-subnet-${count.index + 1}"
+      Environment = var.environment
+      Type        = "Private"
+    }
+  )
 }
 
-# Get existing subnets if not creating
+# Get existing subnets if not creating - only private subnets
 data "aws_subnets" "existing" {
   count = var.create_subnets ? 0 : 1
   
   filter {
     name   = "vpc-id"
     values = [local.vpc_id]
+  }
+  
+  # Only get private subnets for Redshift and NLB
+  filter {
+    name   = "tag:Type"
+    values = ["Private"]
+  }
+  
+  # Optional: Filter by project if we're in a shared VPC
+  # This ensures we only use subnets tagged for our project
+  # Comment this out if using generic/shared subnets
+  dynamic "filter" {
+    for_each = lookup(var.tags, "Project", "") != "" ? [1] : []
+    content {
+      name   = "tag:Project"
+      values = [var.tags["Project"]]
+    }
   }
 }
 
@@ -127,10 +154,14 @@ resource "aws_security_group" "producer" {
     cidr_blocks = ["0.0.0.0/0"]
   }
 
-  tags = {
-    Name        = "redshift-producer-sg"
-    Environment = var.environment
-  }
+  tags = merge(
+    var.tags,
+    {
+      Name        = "redshift-producer-sg"
+      Environment = var.environment
+      Purpose     = "producer-access"
+    }
+  )
 }
 
 # Security group for consumer workgroups
@@ -163,8 +194,12 @@ resource "aws_security_group" "consumer" {
     cidr_blocks = ["0.0.0.0/0"]
   }
 
-  tags = {
-    Name        = "redshift-consumer-sg"
-    Environment = var.environment
-  }
+  tags = merge(
+    var.tags,
+    {
+      Name        = "redshift-consumer-sg"
+      Environment = var.environment
+      Purpose     = "consumer-access"
+    }
+  )
 }

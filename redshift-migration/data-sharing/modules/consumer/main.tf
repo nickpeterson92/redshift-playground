@@ -18,11 +18,14 @@ resource "aws_iam_role" "consumer" {
     ]
   })
   
-  tags = {
-    Name        = "${var.namespace_name}-role"
-    Environment = var.environment
-    Type        = "generic-consumer"
-  }
+  tags = merge(
+    var.tags,
+    {
+      Name        = "${var.namespace_name}-role"
+      Environment = var.environment
+      Type        = "generic-consumer"
+    }
+  )
   
 }
 
@@ -64,12 +67,15 @@ resource "aws_redshiftserverless_namespace" "consumer" {
   
   iam_roles = [aws_iam_role.consumer.arn]
 
-  tags = {
-    Name        = var.namespace_name
-    Environment = var.environment
-    Type        = "generic-consumer"
-    Role        = "consumer"
-  }
+  tags = merge(
+    var.tags,
+    {
+      Name        = var.namespace_name
+      Environment = var.environment
+      Type        = "generic-consumer"
+      Role        = "consumer"
+    }
+  )
   
   log_exports = [     "connectionlog",     "useractivitylog",     "userlog",   ]
 }
@@ -103,12 +109,15 @@ resource "aws_redshiftserverless_workgroup" "consumer" {
     parameter_value = tostring(var.max_query_execution_time)
   }
 
-  tags = {
-    Name        = var.workgroup_name
-    Environment = var.environment
-    Type        = "generic-consumer"
-    Role        = "consumer"
-  }
+  tags = merge(
+    var.tags,
+    {
+      Name        = var.workgroup_name
+      Environment = var.environment
+      Type        = "generic-consumer"
+      Role        = "consumer"
+    }
+  )
   
   lifecycle {
     ignore_changes = [config_parameter]

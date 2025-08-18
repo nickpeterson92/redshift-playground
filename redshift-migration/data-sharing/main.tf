@@ -12,6 +12,20 @@ provider "aws" {
   region = var.aws_region
 }
 
+# Common tags for all resources
+locals {
+  common_tags = merge(
+    {
+      Environment = var.environment
+      Project     = var.project_name
+      ManagedBy   = "Terraform"
+      Owner       = "DevOps"
+      CostCenter  = "${var.project_name}-${var.environment}"
+    },
+    var.additional_tags
+  )
+}
+
 # Common networking resources
 module "networking" {
   source = "./modules/networking"
@@ -23,6 +37,8 @@ module "networking" {
   vpc_cidr       = var.vpc_cidr
   create_subnets = var.create_subnets
   subnet_cidrs   = var.subnet_cidrs
+  
+  tags = local.common_tags
 }
 
 # Producer namespace for writes (serverless)
@@ -67,6 +83,8 @@ module "consumers" {
   consumer_index = count.index + 1
   aws_region     = var.aws_region
   
+  tags = local.common_tags
+  
   # CRITICAL: Consumers must wait for producer to be created first
   # This ensures data sharing can be established properly
   depends_on = [module.producer]
@@ -95,6 +113,8 @@ module "nlb" {
     ]),
     []
   )
+  
+  tags = local.common_tags
   
   depends_on = [module.consumers]
 }

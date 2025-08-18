@@ -36,3 +36,9 @@ variable "subnet_cidrs" {
   type        = list(string)
   default     = ["10.0.0.0/23", "10.0.2.0/23", "10.0.4.0/23"]
 }
+
+variable "tags" {
+  description = "Tags to apply to all resources"
+  type        = map(string)
+  default     = {}
+}

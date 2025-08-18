@@ -60,10 +60,9 @@ def test_connections(nlb_endpoint, password, num_tests=20):
             conn = psycopg2.connect(
                 host=nlb_endpoint,
                 port=5439,
-                database="airline_shared",
+                database="consumer_db",
                 user="admin",
                 password=password,
-                sslmode='require',
                 connect_timeout=10
             )
             

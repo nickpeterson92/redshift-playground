@@ -86,3 +86,8 @@ variable "max_query_execution_time" {
   type        = number
   default     = 3600  # 1 hour
 }
+variable "tags" {
+  description = "Tags to apply to all resources"
+  type        = map(string)
+  default     = {}
+}

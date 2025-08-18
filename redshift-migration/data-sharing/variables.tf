@@ -16,6 +16,12 @@ variable "environment" {
   default     = "dev"
 }
 
+variable "additional_tags" {
+  description = "Additional tags to apply to all resources"
+  type        = map(string)
+  default     = {}
+}
+
 variable "vpc_name" {
   description = "Name of the VPC"
   type        = string

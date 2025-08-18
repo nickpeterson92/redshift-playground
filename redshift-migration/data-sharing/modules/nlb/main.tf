@@ -8,11 +8,14 @@ resource "aws_lb" "redshift_nlb" {
   enable_deletion_protection = false
   enable_cross_zone_load_balancing = true
 
-  tags = {
-    Name        = "${var.project_name}-redshift-nlb"
-    Environment = var.environment
-    Purpose     = "redshift-query-distribution"
-  }
+  tags = merge(
+    var.tags,
+    {
+      Name        = "${var.project_name}-redshift-nlb"
+      Environment = var.environment
+      Purpose     = "redshift-query-distribution"
+    }
+  )
 }
 
 # Target group for Redshift consumers (port 5439)
@@ -44,10 +47,13 @@ resource "aws_lb_target_group" "redshift_consumers" {
     type    = "source_ip"
   }
 
-  tags = {
-    Name        = "${var.project_name}-redshift-consumers"
-    Environment = var.environment
-  }
+  tags = merge(
+    var.tags,
+    {
+      Name        = "${var.project_name}-redshift-consumers"
+      Environment = var.environment
+    }
+  )
 }
 
 # Listener for Redshift connections
