@@ -573,14 +573,11 @@ class CursesMonitor:
                             
                             if healthy >= expected_targets:
                                 self.set_phase_status("targets", "complete")
-                                self.set_phase_status("health", "complete")
                                 with self.state_lock:
                                     self.deployment_complete = True
                             elif total > 0:
                                 # Targets are registering or health checking
                                 self.set_phase_status("targets", "in_progress")
-                                if healthy > 0 or initial > 0:
-                                    self.set_phase_status("health", "in_progress")
                     except:
                         pass
             else:
@@ -623,9 +620,8 @@ class CursesMonitor:
                 # If deployment is complete, slow down polling significantly
                 if self.deployment_complete:
                     poll_interval = 10  # Very slow polling when complete
-                # Poll faster during target registration and health checks
-                elif self.phase_status.get("targets") == "in_progress" or \
-                     self.phase_status.get("health") == "in_progress":
+                # Poll faster during target registration
+                elif self.phase_status.get("targets") == "in_progress":
                     poll_interval = 1  # Poll every second during target registration
                 elif self.phase_status.get("nlb") == "in_progress":
                     poll_interval = 1.5  # Slightly faster for NLB provisioning
