@@ -70,8 +70,8 @@ resource "aws_lb_listener" "redshift" {
 
 # Manage target group attachments via script to avoid Terraform lifecycle issues
 # This allows seamless addition/removal of consumers without recreating attachments
-resource "null_resource" "manage_targets" {
-  triggers = {
+resource "terraform_data" "manage_targets" {
+  triggers_replace = {
     consumer_count = var.consumer_count
     target_group = aws_lb_target_group.redshift_consumers.id
     # Trigger update when endpoints change
