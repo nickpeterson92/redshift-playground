@@ -97,7 +97,7 @@ Note: Data sharing must be configured manually after deployment via SQL commands
 ## Directory Structure
 
 ```
-data-sharing/
+golden-architecture/
 ├── main.tf                 # Root module orchestration
 ├── variables.tf           # Input variables (includes VPC creation)  
 ├── outputs.tf             # Output values & commands
@@ -186,7 +186,7 @@ data-sharing/
 ### 1. Set Up Remote State Backend (First Time Only)
 
 ```bash
-cd data-sharing/backend-setup
+cd golden-architecture/backend-setup
 terraform init
 terraform apply
 # Note the output values for backend configuration

@@ -17,12 +17,15 @@ redshift-migration/
 ├── traditional/          # Traditional provisioned Redshift cluster
 │   └── README.md        # Detailed setup and configuration
 │
-├── data-sharing/        # Redshift Serverless with NLB and data sharing
+├── golden-architecture/ # Redshift Serverless with NLB and data sharing
 │   ├── README.md        # Complete deployment guide
 │   ├── modules/         # Reusable Terraform modules
 │   ├── environments/    # Environment configurations (dev/staging/prod)
 │   ├── test-instance/   # EC2-based testing infrastructure
-│   └── scripts/         # Monitoring and utility scripts
+│   └── scripts/         # Deployment and utility scripts
+│
+├── monitoring/          # Monitoring and observability tools
+│   └── README.md        # Monitoring setup guide
 │
 └── data-generation/     # Sample data generation utilities
     └── README.md        # Data generation guide
@@ -33,8 +36,8 @@ redshift-migration/
 ### For Redshift Serverless with Data Sharing (Recommended)
 
 ```bash
-cd data-sharing
-# Follow the comprehensive guide in data-sharing/README.md
+cd golden-architecture
+# Follow the comprehensive guide in golden-architecture/README.md
 ```
 
 This deployment includes:
