@@ -23,12 +23,12 @@ data "aws_availability_zones" "available" {
   state = "available"
 }
 
-# Public Subnets (for NAT Gateways and Load Balancers)
+# Public Subnets (for NAT Gateways, Load Balancers, and Redshift clusters)
 resource "aws_subnet" "public" {
   count = min(length(data.aws_availability_zones.available.names), 3)
   
   vpc_id                  = aws_vpc.main.id
-  cidr_block              = cidrsubnet(var.vpc_cidr, 10, count.index)  # /26 = 64 IPs
+  cidr_block              = cidrsubnet(var.vpc_cidr, 8, count.index)  # /24 = 256 IPs
   availability_zone       = data.aws_availability_zones.available.names[count.index]
   map_public_ip_on_launch = true
   
@@ -43,7 +43,7 @@ resource "aws_subnet" "private" {
   count = min(length(data.aws_availability_zones.available.names), 3)
   
   vpc_id            = aws_vpc.main.id
-  cidr_block        = cidrsubnet(var.vpc_cidr, 7, count.index + 10)  # /23 = 512 IPs for Redshift scaling
+  cidr_block        = cidrsubnet(var.vpc_cidr, 7, count.index + 3)  # /23 = 512 IPs, offset by 3 to avoid overlap with public
   availability_zone = data.aws_availability_zones.available.names[count.index]
   
   tags = merge(var.tags, {

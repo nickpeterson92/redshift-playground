@@ -1,18 +1,37 @@
-# AWS Configuration
-aws_region = "us-west-2"
+# Example Terraform variables for Redshift Traditional Deployment
+# Copy this to terraform.tfvars and update with your values
 
-# Cluster Configuration
-cluster_identifier   = "my-redshift-cluster"
-database_name       = "mydb"
-master_username     = "admin"
-master_password     = "ChangeMe123"  # Use a strong password!
-node_type          = "dc2.large"
-number_of_nodes    = 2
+# General Configuration
+aws_region  = "us-west-2"
+environment = "dev"
 
-# Network Configuration
-allowed_ip = "YOUR.IP.ADDRESS.HERE/32"  # Replace with your actual IP address
+# Database Configuration
+database_name   = "mydb"
+master_username = "admin"
+master_password = "ChangeMe123!"  # CHANGE THIS!
 
-# Optional: VPC Configuration
-# If you have an existing VPC, uncomment and set these:
-# vpc_id     = "vpc-xxxxxxxxx"
-# subnet_ids = ["subnet-xxxxxx", "subnet-yyyyyy"]
+# Producer Cluster Configuration (Central Data Warehouse)
+node_type       = "ra3.xlplus"     # Cost-optimized node type
+cluster_type    = "single-node"    # Use "multi-node" for production
+number_of_nodes = 1                # Increase for production workloads
+
+# Consumer Cluster Configuration (Domain-specific clusters)
+consumer_node_type       = "ra3.xlplus"  # Can use smaller nodes for consumers
+consumer_cluster_type    = "single-node" # Use "multi-node" for production
+consumer_number_of_nodes = 1             # Adjust based on workload
+
+# Security Configuration
+allowed_ip          = "YOUR_IP_HERE/32"  # Replace with your IP address
+publicly_accessible = false              # Set to true for dev/test only
+encrypt_cluster     = false              # Enable for production
+
+# Snapshot Configuration
+skip_final_snapshot     = true  # Set to false for production
+snapshot_retention_days = 1     # Increase for production (e.g., 7 or 30)
+
+# Maintenance Configuration
+maintenance_window = "sun:03:00-sun:04:00"  # Adjust for your timezone
+
+# Logging Configuration
+enable_logging      = false  # Enable for production
+logging_bucket_name = ""     # S3 bucket name if logging is enabled

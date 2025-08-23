@@ -1,104 +1,123 @@
-# Traditional Redshift Cluster (Optional)
+# Redshift Traditional Deployment
 
-## Purpose
-
-This deployment is **OPTIONAL** and only needed for:
-
-1. **Initial Data Loading**: If you need to create and load sample data from scratch
-2. **Snapshot Storage**: Maintaining a traditional cluster with your baseline data
-3. **Learning/Testing**: Understanding traditional Redshift before moving to serverless
-4. **Cost Comparison**: Running side-by-side cost analysis
-
-## When You DON'T Need This
-
-You can skip this deployment entirely if:
-- ✅ You already have a snapshot with your data
-- ✅ You're going straight to serverless architecture
-- ✅ You want to minimize costs (serverless only)
-- ✅ You're restoring from an existing snapshot
+This deployment creates a traditional Redshift cluster setup with a producer-consumer architecture built on top of the bootstrap infrastructure.
 
 ## Architecture
 
-This creates a minimal traditional Redshift cluster with:
-- Single ra3.xlplus node (cheapest RA3 option)
-- VPC with proper networking (3 AZs)
-- Security group for access control
-- ~$414/month fixed cost (24/7 running)
+The deployment creates:
+- **1 Producer Cluster** - Central data warehouse that owns and manages all data
+- **2 Consumer Clusters** - Domain-specific clusters for isolated workloads:
+  - **Sales/Marketing Domain** - For sales and marketing analytics
+  - **Operations/Analytics Domain** - For operational analytics and reporting
 
-## Quick Deploy (If Needed)
+## Features
 
-```bash
-# Only if you need to create initial data
-cd traditional
-terraform init
-terraform apply -var="master_password=YourPassword123!"
+- **Data Sharing Ready**: Clusters are configured with namespace IDs for Redshift data sharing
+- **Cost Optimized**: Uses ra3.xlplus nodes (single-node by default for development)
+- **Secure by Default**: Leverages bootstrap VPC and private subnets
+- **IAM Integration**: Configured with IAM roles for S3 access
+- **Flexible Configuration**: Separate settings for producer and consumer clusters
 
-# Create snapshot after loading data
-aws redshift create-cluster-snapshot \
-  --cluster-identifier my-redshift-cluster \
-  --snapshot-identifier airline-data-snapshot
+## Prerequisites
 
-# Then destroy to save costs
-terraform destroy
-```
+1. Bootstrap infrastructure must be deployed first:
+   ```bash
+   cd ../../bootstrap
+   terraform init
+   terraform apply
+   ```
 
-## Snapshot Management
+2. AWS credentials configured with appropriate permissions
 
-Once you have a snapshot, you can:
-1. **Destroy the traditional cluster** to save costs
-2. **Keep the snapshot** (minimal storage cost)
-3. **Restore to serverless** when needed
+## Deployment
 
-```bash
-# List snapshots
-aws redshift describe-cluster-snapshots \
-  --query 'Snapshots[*].[SnapshotIdentifier,Status,ClusterCreateTime]' \
-  --output table
+1. Initialize Terraform:
+   ```bash
+   terraform init
+   ```
 
-# Delete old snapshots to save storage costs
-aws redshift delete-cluster-snapshot \
-  --snapshot-identifier old-snapshot-name
-```
+2. Review the configuration:
+   ```bash
+   cp terraform.tfvars.example terraform.tfvars
+   # Edit terraform.tfvars with your settings
+   ```
 
-## Migration to Serverless
+3. Plan the deployment:
+   ```bash
+   terraform plan
+   ```
 
-After creating your snapshot:
+4. Apply the configuration:
+   ```bash
+   terraform apply
+   ```
 
-1. **Deploy data-sharing** (which creates its own VPC):
-```bash
-cd ../data-sharing
-terraform init
-terraform apply
-```
+## Configuration
 
-2. **Restore snapshot to producer**:
-- Use AWS Console → Redshift Serverless
-- Select your producer namespace
-- Restore from snapshot
+Key variables in `terraform.tfvars`:
+
+- `environment` - Environment name (dev/staging/prod)
+- `master_password` - Master password for all clusters (change from default!)
+- `node_type` - Producer cluster node type
+- `consumer_node_type` - Consumer clusters node type
+- `publicly_accessible` - Whether clusters are publicly accessible
+- `encrypt_cluster` - Enable encryption for production
+
+## Data Sharing Setup
+
+After deployment, you can set up data sharing between producer and consumer clusters:
+
+1. On the **Producer Cluster**, create a datashare:
+   ```sql
+   -- Connect to producer cluster
+   CREATE DATASHARE sales_share;
+   ALTER DATASHARE sales_share ADD SCHEMA sales_schema;
+   ALTER DATASHARE sales_share ADD ALL TABLES IN SCHEMA sales_schema;
+   GRANT USAGE ON DATASHARE sales_share TO NAMESPACE '<consumer_sales_namespace_id>';
+   ```
+
+2. On the **Consumer Cluster**, create a database from the datashare:
+   ```sql
+   -- Connect to consumer cluster
+   CREATE DATABASE sales_db FROM DATASHARE sales_share OF NAMESPACE '<producer_namespace_id>';
+   ```
+
+## Outputs
+
+The deployment provides connection information for all clusters:
+
+- Producer cluster endpoint, JDBC connection string, and psql command
+- Consumer Sales cluster connection details
+- Consumer Operations cluster connection details
+- Namespace IDs for data sharing configuration
 
 ## Cost Optimization
 
-**Traditional Cluster**:
-- $414/month continuous
-- Consider reserved instances for long-term
-- Shut down when not needed
+Default configuration is optimized for development:
+- Single-node clusters (ra3.xlplus)
+- Minimal snapshot retention (1 day)
+- No encryption (enable for production)
 
-**Serverless Alternative**:
-- $0 when paused
-- Pay only for usage
-- Auto-scaling included
+For production, consider:
+- Multi-node clusters for high availability
+- Longer snapshot retention (7-30 days)
+- Encryption enabled
+- Logging to S3
 
 ## Files
 
-- `redshift.tf` - Complete traditional deployment
+- `main.tf` - Main Terraform configuration
+- `variables.tf` - Variable definitions
+- `outputs.tf` - Output definitions
+- `backend.tf` - S3 backend configuration
+- `terraform.tfvars` - Variable values (create from example)
 - `terraform.tfvars.example` - Example configuration
-- `minimal-redshift.tf.example` - Minimal config without VPC (uses default)
 
-## Important Notes
+## Cleanup
 
-⚠️ **VPC Creation**: This creates its own VPC. If you want to share a VPC with data-sharing:
-1. Deploy traditional first (if needed)
-2. Set `create_vpc = false` in data-sharing
-3. Use the same `vpc_name`
+To destroy the resources:
+```bash
+terraform destroy
+```
 
-💡 **Recommendation**: Skip this entirely and go straight to data-sharing with serverless!
+Note: This will delete all clusters and their data. Ensure you have backups if needed.
