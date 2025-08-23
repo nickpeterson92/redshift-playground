@@ -7,15 +7,16 @@ AWS Redshift learning playground with Terraform Infrastructure as Code.
 ```
 redshift-playground/
 └── redshift-migration/
-    ├── data-sharing/        # ⭐ Main: Serverless with NLB & data sharing
-    ├── traditional/         # Legacy: Traditional cluster deployment  
-    └── data-generation/     # Sample airline data generator
+    ├── golden-architecture/        # ⭐ Main: Serverless with NLB & data sharing
+    ├── traditional/                # Legacy: Traditional cluster deployment
+    ├── monitoring/                 # Python+Curses monitoring TUI utils
+    └── data-generation/            # Sample airline data generator
 ```
 
 ## 🚀 Quick Start
 
 ```bash
-cd redshift-migration/data-sharing
+cd redshift-migration/golden-architecture
 # See README.md for complete setup instructions
 ```
 
