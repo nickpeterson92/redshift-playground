@@ -9,14 +9,14 @@ output "subnet_ids" {
   value       = module.networking.subnet_ids
 }
 
-output "producer_namespace_id" {
-  description = "Producer namespace ID for data sharing setup"
-  value       = module.producer.namespace_id
+output "producer_cluster_id" {
+  description = "Producer cluster ID from traditional deployment"
+  value       = data.terraform_remote_state.traditional.outputs.producer_cluster_id
 }
 
 output "producer_endpoint" {
-  description = "Producer workgroup endpoint"
-  value       = module.producer.endpoint
+  description = "Producer cluster endpoint from traditional deployment"
+  value       = data.terraform_remote_state.traditional.outputs.producer_cluster_endpoint
 }
 
 output "consumer_namespace_ids" {
@@ -54,10 +54,6 @@ output "connection_info" {
   }
 }
 
-output "snapshot_restore_status" {
-  description = "Snapshot restore status"
-  value       = var.restore_from_snapshot ? "Snapshot restore configured" : "Snapshot restore not configured"
-}
 
 output "master_username" {
   description = "Master username for database access"
@@ -79,7 +75,7 @@ output "database_name" {
 output "data_sharing_commands" {
   description = "Commands to set up data sharing after deployment"
   value = <<-EOT
-    # Connect to producer and run:
+    # Connect to TRADITIONAL PRODUCER CLUSTER and run:
     CREATE DATASHARE airline_share SET PUBLICACCESSIBLE TRUE;
     ALTER DATASHARE airline_share ADD SCHEMA airline_dw;
     ALTER DATASHARE airline_share ADD ALL TABLES IN SCHEMA airline_dw;
@@ -89,7 +85,9 @@ output "data_sharing_commands" {
     
     # On each consumer, create database from share:
     # (Connect to each consumer individually)
-    CREATE DATABASE airline_shared FROM DATASHARE airline_share OF NAMESPACE '${module.producer.namespace_id}';
+    # Note: Get the producer namespace ID by connecting to traditional producer cluster and running:
+    # SELECT current_namespace;
+    CREATE DATABASE airline_shared FROM DATASHARE airline_share OF NAMESPACE '<PRODUCER_NAMESPACE_ID>';
     
     # Verify the share is working:
     SELECT * FROM airline_shared.airline_dw.dim_aircraft LIMIT 10;

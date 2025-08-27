@@ -1,0 +1,20 @@
+# Redshift Test Drive Configuration
+# Copy to terraform.tfvars and update values as needed
+
+# These values should match your existing deployments
+aws_region  = "us-west-2"
+environment = "dev"
+
+# Network Configuration
+# This should match what you have in traditional/terraform.tfvars
+allowed_ip = "71.231.5.129/32"  # Your IP for SSH access
+
+# EC2 Instance Configuration
+# Use t3.large for dev/test, m5.8xlarge for production workloads
+test_drive_instance_type = "t3.large"
+
+# These credentials should match your traditional deployment
+# Consider using data sources or environment variables instead
+database_name   = "mydb"
+master_username = "admin"
+master_password = "Password123"  # Should match traditional deployment

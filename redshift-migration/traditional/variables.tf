@@ -111,11 +111,24 @@ variable "maintenance_window" {
 variable "enable_logging" {
   description = "Enable Redshift cluster logging"
   type        = bool
-  default     = false
+  default     = true
 }
 
 variable "logging_bucket_name" {
   description = "S3 bucket for Redshift logs (leave empty to disable logging)"
+  type        = string
+  default     = ""
+}
+
+variable "log_retention_days" {
+  description = "Number of days to retain Redshift audit logs in S3"
+  type        = number
+  default     = 30
+}
+
+# Snapshot Restoration Configuration
+variable "producer_snapshot_id" {
+  description = "Snapshot ID to restore the producer cluster from (leave empty to create new cluster)"
   type        = string
   default     = ""
 }

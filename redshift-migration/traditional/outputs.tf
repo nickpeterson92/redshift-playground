@@ -99,6 +99,25 @@ output "redshift_iam_role_arn" {
   value       = aws_iam_role.redshift.arn
 }
 
+# Logging Outputs
+output "redshift_logs_s3_bucket" {
+  description = "S3 bucket name for Redshift audit logs"
+  value       = aws_s3_bucket.redshift_logs.id
+}
+
+output "redshift_logs_s3_bucket_arn" {
+  description = "S3 bucket ARN for Redshift audit logs"
+  value       = aws_s3_bucket.redshift_logs.arn
+}
+
+output "audit_logging_enabled" {
+  description = "Status of audit logging for consumer clusters"
+  value = {
+    consumer_sales      = "Enabled - Logs at s3://${aws_s3_bucket.redshift_logs.id}/consumer-sales/"
+    consumer_operations = "Enabled - Logs at s3://${aws_s3_bucket.redshift_logs.id}/consumer-operations/"
+  }
+}
+
 # VPC Information (from bootstrap)
 output "vpc_id" {
   description = "VPC ID from bootstrap"

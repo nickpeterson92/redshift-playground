@@ -74,6 +74,28 @@ resource "aws_redshift_subnet_group" "main" {
   }
 }
 
+# Parameter group for enabling user activity logging (required for audit logs)
+resource "aws_redshift_parameter_group" "audit_logging" {
+  name   = "${var.environment}-redshift-audit-logging"
+  family = "redshift-1.0"
+
+  parameter {
+    name  = "enable_user_activity_logging"
+    value = "true"
+  }
+
+  parameter {
+    name  = "require_ssl"
+    value = "false"
+  }
+
+  tags = {
+    Name        = "${var.environment}-redshift-audit-logging"
+    Environment = var.environment
+    Purpose     = "Enable audit logging for replay features"
+  }
+}
+
 # IAM role for Redshift clusters
 resource "aws_iam_role" "redshift" {
   name = "${var.environment}-redshift-cluster-role"
@@ -103,23 +125,28 @@ resource "aws_iam_role_policy_attachment" "redshift_s3_read" {
   role       = aws_iam_role.redshift.name
 }
 
-# Producer Redshift cluster (central data warehouse)
+# Producer Redshift cluster (restored from snapshot)
 resource "aws_redshift_cluster" "producer" {
   cluster_identifier = "${var.environment}-producer-main"  # Changed name to avoid stuck cluster
-  database_name      = var.database_name
-  master_username    = var.master_username
-  master_password    = var.master_password
-
-  # Using ra3.xlplus for cost optimization
+  
+  # Restore from snapshot if provided
+  snapshot_identifier = var.producer_snapshot_id != "" ? var.producer_snapshot_id : null
+  
+  # Required parameters (used for both new and restored clusters)
   node_type       = var.node_type
   cluster_type    = var.cluster_type
   number_of_nodes = var.number_of_nodes
+  
+  # Only needed for new cluster creation (ignored when restoring)
+  database_name   = var.database_name
+  master_username = var.master_username
+  master_password = var.master_password
 
   # Cost optimization settings
   skip_final_snapshot                 = var.skip_final_snapshot
   automated_snapshot_retention_period = var.snapshot_retention_days
 
-  # Network configuration
+  # Network configuration (required for both new and restored)
   cluster_subnet_group_name = aws_redshift_subnet_group.main.name
   vpc_security_group_ids    = [aws_security_group.redshift.id]
 
@@ -135,13 +162,20 @@ resource "aws_redshift_cluster" "producer" {
   # Maintenance window
   preferred_maintenance_window = var.maintenance_window
 
-  # Logging configuration removed - use aws_redshift_logging resource instead if needed
-
   tags = {
-    Name        = "${var.environment}-producer-cluster"
-    Environment = var.environment
-    Type        = "Producer"
-    DataDomain  = "Central"
+    Name         = "${var.environment}-producer-cluster"
+    Environment  = var.environment
+    Type         = "Producer"
+    DataDomain   = "Central"
+    RestoredFrom = var.producer_snapshot_id != "" ? var.producer_snapshot_id : "new-cluster"
+  }
+  
+  lifecycle {
+    ignore_changes = [
+      master_password,  # Don't try to change password after restore
+      database_name,    # Database name comes from snapshot
+      master_username   # Username comes from snapshot
+    ]
   }
 }
 
@@ -177,7 +211,8 @@ resource "aws_redshift_cluster" "consumer_sales" {
   # Maintenance window
   preferred_maintenance_window = var.maintenance_window
 
-  # Logging configuration removed - use aws_redshift_logging resource instead if needed
+  # Parameter group for audit logging
+  cluster_parameter_group_name = aws_redshift_parameter_group.audit_logging.name
 
   tags = {
     Name        = "${var.environment}-consumer-sales-cluster"
@@ -219,7 +254,8 @@ resource "aws_redshift_cluster" "consumer_operations" {
   # Maintenance window
   preferred_maintenance_window = var.maintenance_window
 
-  # Logging configuration removed - use aws_redshift_logging resource instead if needed
+  # Parameter group for audit logging
+  cluster_parameter_group_name = aws_redshift_parameter_group.audit_logging.name
 
   tags = {
     Name        = "${var.environment}-consumer-ops-cluster"
@@ -248,4 +284,116 @@ resource "aws_redshift_cluster_iam_roles" "consumer_sales" {
 resource "aws_redshift_cluster_iam_roles" "consumer_operations" {
   cluster_identifier = aws_redshift_cluster.consumer_operations.cluster_identifier
   iam_role_arns      = [aws_iam_role.redshift.arn]
+}
+
+# S3 bucket for Redshift audit logs (required for replay features)
+resource "aws_s3_bucket" "redshift_logs" {
+  bucket        = "${var.environment}-redshift-audit-logs-${data.aws_caller_identity.current.account_id}"
+  force_destroy = true  # Allow destruction even if bucket has objects
+  
+  tags = {
+    Name        = "${var.environment}-redshift-audit-logs"
+    Environment = var.environment
+    Purpose     = "Redshift audit logs for replay features"
+  }
+}
+
+# S3 bucket public access block
+resource "aws_s3_bucket_public_access_block" "redshift_logs" {
+  bucket = aws_s3_bucket.redshift_logs.id
+
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+# S3 bucket versioning
+resource "aws_s3_bucket_versioning" "redshift_logs" {
+  bucket = aws_s3_bucket.redshift_logs.id
+  
+  versioning_configuration {
+    status = "Enabled"
+  }
+}
+
+# S3 bucket lifecycle configuration for log retention
+resource "aws_s3_bucket_lifecycle_configuration" "redshift_logs" {
+  bucket = aws_s3_bucket.redshift_logs.id
+
+  rule {
+    id     = "delete-old-logs"
+    status = "Enabled"
+    
+    filter {}  # Apply to all objects in bucket
+
+    expiration {
+      days = var.log_retention_days
+    }
+  }
+}
+
+# Data source for current AWS account
+data "aws_caller_identity" "current" {}
+
+# S3 bucket policy to allow Redshift service to write logs
+resource "aws_s3_bucket_policy" "redshift_logs" {
+  bucket = aws_s3_bucket.redshift_logs.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "Put bucket policy needed for Redshift audit logging"
+        Effect = "Allow"
+        Principal = {
+          Service = "redshift.amazonaws.com"
+        }
+        Action = "s3:PutObject"
+        Resource = "${aws_s3_bucket.redshift_logs.arn}/*"
+        Condition = {
+          StringEquals = {
+            "s3:x-amz-acl" = "bucket-owner-full-control"
+          }
+        }
+      },
+      {
+        Sid    = "Get bucket policy needed for Redshift audit logging"
+        Effect = "Allow"
+        Principal = {
+          Service = "redshift.amazonaws.com"
+        }
+        Action = "s3:GetBucketAcl"
+        Resource = aws_s3_bucket.redshift_logs.arn
+      }
+    ]
+  })
+}
+
+# Logging configuration for Consumer Sales cluster
+# Enables audit logging to S3 for connection, user, and user activity logs
+resource "aws_redshift_logging" "consumer_sales" {
+  cluster_identifier   = aws_redshift_cluster.consumer_sales.cluster_identifier
+  log_destination_type = "s3"
+  bucket_name         = aws_s3_bucket.redshift_logs.id
+  s3_key_prefix       = "consumer-sales/"
+
+  depends_on = [
+    aws_redshift_cluster.consumer_sales,
+    aws_s3_bucket_policy.redshift_logs
+  ]
+}
+
+# Logging configuration for Consumer Operations cluster
+# Enables audit logging to S3 for connection, user, and user activity logs
+resource "aws_redshift_logging" "consumer_operations" {
+  cluster_identifier   = aws_redshift_cluster.consumer_operations.cluster_identifier
+  log_destination_type = "s3"
+  bucket_name         = aws_s3_bucket.redshift_logs.id
+  s3_key_prefix       = "consumer-operations/"
+
+  depends_on = [
+    aws_redshift_cluster.consumer_operations,
+    aws_s3_bucket_policy.redshift_logs
+  ]
 }

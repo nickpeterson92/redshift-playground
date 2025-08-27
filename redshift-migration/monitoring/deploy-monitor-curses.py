@@ -23,7 +23,7 @@ PHASES = [
     {"name": "VPC & Networking", "key": "networking", "icon": "🌐"},
     {"name": "Security Groups", "key": "security", "icon": "🔒"},
     {"name": "Producer Namespace", "key": "producer_namespace", "icon": "📝"},
-    {"name": "Producer Workgroup", "key": "producer_workgroup", "icon": "⚡"},
+    {"name": "Producer Cluster", "key": "producer_workgroup", "icon": "🗄️"},
     {"name": "Consumer Namespaces", "key": "consumer_namespaces", "icon": "📋"},
     {"name": "Consumer Workgroups", "key": "consumer_workgroups", "icon": "⚡"},
     {"name": "VPC Endpoints", "key": "vpc_endpoints", "icon": "🔌"},
@@ -315,7 +315,45 @@ class CursesMonitor:
                     self._set_phase_status_unsafe("networking", "pending")
                     self._set_phase_status_unsafe("security", "pending")
         
-        # Check workgroups
+        # Check producer provisioned cluster
+        producer_clusters = self.run_aws_command(
+            "redshift", "describe-clusters",
+            f"Clusters[?contains(ClusterIdentifier, '{self.environment}-producer')].[ClusterIdentifier,ClusterStatus,ClusterAvailabilityStatus]"
+        )
+        
+        if producer_clusters and len(producer_clusters) > 0:
+            with self.state_lock:
+                producer_id = producer_clusters[0][0]
+                producer_status = producer_clusters[0][1]
+                producer_avail = producer_clusters[0][2] if len(producer_clusters[0]) > 2 else None
+                
+                self.resources["producer_workgroup"] = producer_id  # Store cluster ID in same field for display
+                
+                # Map cluster status to our status model
+                if producer_status == "available":
+                    self.resources["producer_status"] = "AVAILABLE"
+                    self._set_phase_status_unsafe("producer_namespace", "complete")
+                    self._set_phase_status_unsafe("producer_workgroup", "complete")
+                elif producer_status == "creating":
+                    self.resources["producer_status"] = "CREATING"
+                    self._set_phase_status_unsafe("producer_namespace", "in_progress")
+                    self._set_phase_status_unsafe("producer_workgroup", "in_progress")
+                elif producer_status == "modifying":
+                    self.resources["producer_status"] = "MODIFYING"
+                    self._set_phase_status_unsafe("producer_namespace", "complete")
+                    self._set_phase_status_unsafe("producer_workgroup", "in_progress")
+                elif producer_status == "deleting":
+                    self.resources["producer_status"] = "DELETING"
+                    self._set_phase_status_unsafe("producer_workgroup", "destroyed")
+                    self._set_phase_status_unsafe("producer_namespace", "destroyed")
+                else:
+                    self.resources["producer_status"] = producer_status.upper()
+        else:
+            with self.state_lock:
+                self.resources["producer_workgroup"] = None
+                self.resources["producer_status"] = None
+        
+        # Check consumer serverless workgroups (keep existing logic)
         workgroups = self.run_aws_command(
             "redshift-serverless", "list-workgroups",
             "workgroups[*].[workgroupName,status]"
@@ -334,24 +372,18 @@ class CursesMonitor:
                 self.resources["consumer_namespaces"] = []  # Will populate from workgroup names
                 self.resources["consumer_workgroups"] = []
                 self.resources["consumer_statuses"] = {}
-                self.resources["producer_workgroup"] = None
-                self.resources["producer_status"] = None
                 
                 for wg_name, status in workgroups:
-                    # Only count project-related workgroups
-                    if self.project_name in wg_name:
-                        if 'producer' in wg_name.lower():
-                            self.resources["producer_workgroup"] = wg_name
-                            self.resources["producer_status"] = status
-                        else:
-                            # It's a consumer workgroup
-                            self.resources["consumer_statuses"][wg_name] = status
-                            if status == "AVAILABLE":
-                                self.resources["consumer_workgroups"].append(wg_name)
-                                # Derive namespace name from workgroup name (replace -wg with -ns)
-                                ns_name = wg_name.replace('-wg-', '-ns-').replace('-wg', '-ns')
-                                if ns_name not in self.resources["consumer_namespaces"]:
-                                    self.resources["consumer_namespaces"].append(ns_name)
+                    # Only count consumer workgroups (skip producer since it's provisioned now)
+                    if self.project_name in wg_name and 'consumer' in wg_name.lower():
+                        # It's a consumer workgroup
+                        self.resources["consumer_statuses"][wg_name] = status
+                        if status == "AVAILABLE":
+                            self.resources["consumer_workgroups"].append(wg_name)
+                            # Derive namespace name from workgroup name (replace -wg with -ns)
+                            ns_name = wg_name.replace('-wg-', '-ns-').replace('-wg', '-ns')
+                            if ns_name not in self.resources["consumer_namespaces"]:
+                                self.resources["consumer_namespaces"].append(ns_name)
                         
                         # Count status for project workgroups only
                         if status == "AVAILABLE":
@@ -361,45 +393,27 @@ class CursesMonitor:
                         elif status in ["DELETING", "DELETED"]:
                             total_deleting += 1
                 
-                # Track workgroup completion status
-                expected_total = self.consumer_count + 1  # consumers + producer
+                # Track consumer workgroup completion status (producer is handled separately above)
+                expected_consumers = self.consumer_count
                 
                 if total_deleting > 0:
-                    # Resources are being deleted
-                    if self.resources.get("producer_status") in ["DELETING", "DELETED"]:
-                        self._set_phase_status_unsafe("producer_workgroup", "destroyed")
-                        self._set_phase_status_unsafe("producer_namespace", "destroyed")
-                    
+                    # Consumer resources are being deleted
                     if any(s in ["DELETING", "DELETED"] for s in self.resources.get("consumer_statuses", {}).values()):
                         self._set_phase_status_unsafe("consumer_workgroups", "destroyed")
                         self._set_phase_status_unsafe("consumer_namespaces", "destroyed")
-                elif total_available >= expected_total:
-                    # All workgroups are available
-                    self._set_phase_status_unsafe("producer_namespace", "complete")
-                    self._set_phase_status_unsafe("producer_workgroup", "complete")
+                elif total_available >= expected_consumers:
+                    # All consumer workgroups are available
                     self._set_phase_status_unsafe("consumer_namespaces", "complete")
                     self._set_phase_status_unsafe("consumer_workgroups", "complete")
                     # Don't mark endpoints/NLB/targets as complete here - check them separately
                 elif total_creating > 0 or total_available > 0:
-                    # Workgroups exist or are being created - namespaces must be complete
-                    # Check if it's producer or consumer being created
-                    producer_exists = False
+                    # Consumer workgroups exist or are being created
                     consumer_available = 0
                     consumer_creating = 0
                     
                     for wg_name, status in workgroups:
-                        if 'producer' in wg_name.lower():
-                            if status == "CREATING":
-                                self._set_phase_status_unsafe("producer_namespace", "complete")
-                                self._set_phase_status_unsafe("producer_workgroup", "in_progress")
-                            elif status == "AVAILABLE":
-                                self._set_phase_status_unsafe("producer_namespace", "complete")
-                                self._set_phase_status_unsafe("producer_workgroup", "complete")
-                            elif status == "MODIFYING":
-                                # Workgroup is being modified (e.g., snapshot restore) - namespace must exist
-                                self._set_phase_status_unsafe("producer_namespace", "complete")
-                                self._set_phase_status_unsafe("producer_workgroup", "in_progress")
-                        else:
+                        # Only process consumer workgroups (producer is provisioned)
+                        if self.project_name in wg_name and 'consumer' in wg_name.lower():
                             # It's a consumer workgroup
                             if status == "CREATING":
                                 consumer_creating += 1
@@ -1074,45 +1088,45 @@ class CursesMonitor:
                             stdscr.addstr(y + i, 45, "Namespace: ")
                             stdscr.attroff(curses.color_pair(7))
                             stdscr.addstr("○ Pending")
-                    elif i == 3:  # Producer workgroup
+                    elif i == 3:  # Producer cluster (provisioned)
                         if resources.get('producer_workgroup'):
                             prod_status = resources.get('producer_status', 'Unknown')
-                            wg_name = resources['producer_workgroup']
-                            # Show full workgroup name if it fits, otherwise truncate from beginning
-                            if len(wg_name) <= 30:
-                                display_name = wg_name
+                            cluster_id = resources['producer_workgroup']
+                            # Show full cluster ID if it fits, otherwise truncate from beginning
+                            if len(cluster_id) <= 30:
+                                display_name = cluster_id
                             else:
-                                display_name = "..." + wg_name[-27:]
+                                display_name = "..." + cluster_id[-27:]
                             
                             if prod_status == "AVAILABLE":
                                 stdscr.attron(curses.color_pair(7))  # Blue
-                                stdscr.addstr(y + i, 45, "Workgroup: ")
+                                stdscr.addstr(y + i, 45, "Cluster: ")
                                 stdscr.attroff(curses.color_pair(7))
                                 stdscr.attron(curses.A_BOLD)
                                 stdscr.addstr(display_name)
                                 stdscr.attroff(curses.A_BOLD)
                             elif prod_status in ["DELETING", "DELETED"]:
                                 stdscr.attron(curses.color_pair(1))
-                                stdscr.addstr(y + i, 45, f"Workgroup: ✗ {prod_status}")
+                                stdscr.addstr(y + i, 45, f"Cluster: ✗ {prod_status}")
                                 stdscr.attroff(curses.color_pair(1))
                             elif prod_status == "MODIFYING":
                                 stdscr.attron(curses.color_pair(7))  # Blue
-                                stdscr.addstr(y + i, 45, "Workgroup: ")
+                                stdscr.addstr(y + i, 45, "Cluster: ")
                                 stdscr.attroff(curses.color_pair(7))
                                 stdscr.attron(curses.color_pair(3) | curses.A_BOLD)
                                 stdscr.addstr("MODIFYING")
                                 stdscr.attroff(curses.color_pair(3) | curses.A_BOLD)
                             else:
                                 stdscr.attron(curses.color_pair(3))
-                                stdscr.addstr(y + i, 45, f"Workgroup: ⟳ {prod_status}")
+                                stdscr.addstr(y + i, 45, f"Cluster: ⟳ {prod_status}")
                                 stdscr.attroff(curses.color_pair(3))
                         elif phase_status.get('producer_workgroup') == 'destroyed':
                             stdscr.attron(curses.color_pair(1))
-                            stdscr.addstr(y + i, 45, "Workgroup: ✗ Destroyed")
+                            stdscr.addstr(y + i, 45, "Cluster: ✗ Destroyed")
                             stdscr.attroff(curses.color_pair(1))
                         else:
                             stdscr.attron(curses.color_pair(7))  # Blue
-                            stdscr.addstr(y + i, 45, "Workgroup: ")
+                            stdscr.addstr(y + i, 45, "Cluster: ")
                             stdscr.attroff(curses.color_pair(7))
                             stdscr.addstr("○ Pending")
                     elif i == 4:  # Consumer namespaces

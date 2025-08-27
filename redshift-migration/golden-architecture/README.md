@@ -132,6 +132,17 @@ golden-architecture/
 ├── backend-setup/        # Initial backend creation
 │   ├── main.tf          # Standalone backend setup
 │   └── README.md        # Setup instructions
+├── test-instance/        # EC2 instances for load testing
+│   ├── main.tf          # Test instance configuration
+│   ├── instances.tf     # EC2 resources
+│   ├── variables.tf     # Test config
+│   └── outputs.tf       # Instance details
+├── test-drive/          # Redshift Test Drive setup
+│   ├── main.tf          # Test Drive EC2 and resources
+│   ├── user-data.sh     # Instance initialization
+│   ├── variables.tf     # Test Drive config
+│   ├── outputs.tf       # Connection details
+│   └── README.md        # Test Drive usage guide
 ├── environments/         # Environment configs
 │   └── dev/
 │       ├── terraform.tfvars      # Dev variables
@@ -393,6 +404,29 @@ vpc_name       = "existing-vpc-name"  # Must match Name tag of existing VPC
   - Automatic VPC endpoint IP discovery
   - Dynamic target updates
   - Availability zone awareness
+
+## 🧪 Testing Infrastructure
+
+### Test Instances (`test-instance/`)
+Separate EC2 instances for load testing and performance validation:
+- **Purpose**: Stress testing NLB load distribution
+- **Configuration**: Multiple EC2 instances with PostgreSQL clients
+- **Deployment**: `cd test-instance && terraform apply`
+- **Usage**: Run load tests to validate NLB round-robin distribution
+
+### Redshift Test Drive (`test-drive/`)
+Infrastructure for workload capture and replay using AWS Redshift Test Drive:
+- **Purpose**: Extract workloads from audit logs and replay on different clusters
+- **Components**: 
+  - EC2 instance (m5.8xlarge for production, t3.large for dev)
+  - S3 buckets for workload storage
+  - Test Drive software and tools
+- **Deployment**: `cd test-drive && terraform apply`
+- **Usage**:
+  1. Extract workload: `/opt/redshift-test-drive/extract-workload.sh`
+  2. Replay on consumers: `/opt/redshift-test-drive/replay-workload.sh [sales|ops]`
+
+See individual README files in each directory for detailed usage instructions.
 
 ## 🔧 Customization
 

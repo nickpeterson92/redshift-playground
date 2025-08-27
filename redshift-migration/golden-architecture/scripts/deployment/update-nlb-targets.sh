@@ -48,26 +48,20 @@ fi
 for WORKGROUP in $WORKGROUPS; do
   echo "Processing workgroup: $WORKGROUP"
   
-  # Get VPC endpoint IPs for the workgroup
-  VPC_ENDPOINT_ID=$(aws redshift-serverless get-workgroup \
-    --workgroup-name "$WORKGROUP" \
+  # Get the endpoint name for this workgroup
+  ENDPOINT_NAME="${WORKGROUP}-endpoint"
+  
+  # Get the managed VPC endpoint IPs directly from Redshift Serverless
+  IPS=$(aws redshift-serverless get-endpoint-access \
+    --endpoint-name "$ENDPOINT_NAME" \
     --region "$REGION" \
-    --query 'workgroup.endpoint.vpcEndpoints[0].vpcEndpointId' \
+    --query 'endpoint.vpcEndpoint.networkInterfaces[*].privateIpAddress' \
     --output text 2>/dev/null || echo "")
   
-  if [ -n "$VPC_ENDPOINT_ID" ] && [ "$VPC_ENDPOINT_ID" != "None" ]; then
-    # Get the private IPs from the VPC endpoint
-    IPS=$(aws ec2 describe-vpc-endpoints \
-      --vpc-endpoint-ids "$VPC_ENDPOINT_ID" \
-      --region "$REGION" \
-      --query 'VpcEndpoints[0].NetworkInterfaceIds' \
-      --output json | jq -r '.[]' | while read -r ENI_ID; do
-        aws ec2 describe-network-interfaces \
-          --network-interface-ids "$ENI_ID" \
-          --region "$REGION" \
-          --query 'NetworkInterfaces[0].PrivateIpAddress' \
-          --output text 2>/dev/null
-      done)
+  if [ -z "$IPS" ]; then
+    echo "  No IPs found for endpoint: $ENDPOINT_NAME"
+  else
+    echo "  Found IPs for $ENDPOINT_NAME: $IPS"
     
     # Register each IP as a target
     for IP in $IPS; do
@@ -83,8 +77,6 @@ for WORKGROUP in $WORKGROUPS; do
         fi
       fi
     done
-  else
-    echo "  No VPC endpoint found for $WORKGROUP"
   fi
 done
 
@@ -95,29 +87,18 @@ if [ -n "$CURRENT_TARGETS" ]; then
     # Check if this target still corresponds to an active workgroup
     FOUND=false
     for WORKGROUP in $WORKGROUPS; do
-      VPC_ENDPOINT_ID=$(aws redshift-serverless get-workgroup \
-        --workgroup-name "$WORKGROUP" \
-        --region "$REGION" \
-        --query 'workgroup.endpoint.vpcEndpoints[0].vpcEndpointId' \
-        --output text 2>/dev/null || echo "")
+      ENDPOINT_NAME="${WORKGROUP}-endpoint"
       
-      if [ -n "$VPC_ENDPOINT_ID" ] && [ "$VPC_ENDPOINT_ID" != "None" ]; then
-        IPS=$(aws ec2 describe-vpc-endpoints \
-          --vpc-endpoint-ids "$VPC_ENDPOINT_ID" \
-          --region "$REGION" \
-          --query 'VpcEndpoints[0].NetworkInterfaceIds' \
-          --output json | jq -r '.[]' | while read -r ENI_ID; do
-            aws ec2 describe-network-interfaces \
-              --network-interface-ids "$ENI_ID" \
-              --region "$REGION" \
-              --query 'NetworkInterfaces[0].PrivateIpAddress' \
-              --output text 2>/dev/null
-          done)
+      # Get the managed VPC endpoint IPs directly from Redshift Serverless
+      IPS=$(aws redshift-serverless get-endpoint-access \
+        --endpoint-name "$ENDPOINT_NAME" \
+        --region "$REGION" \
+        --query 'endpoint.vpcEndpoint.networkInterfaces[*].privateIpAddress' \
+        --output text 2>/dev/null || echo "")
         
-        if echo "$IPS" | grep -q "$TARGET"; then
-          FOUND=true
-          break
-        fi
+      if echo "$IPS" | grep -q "$TARGET"; then
+        FOUND=true
+        break
       fi
     done
     

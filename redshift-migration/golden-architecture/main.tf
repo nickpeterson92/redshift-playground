@@ -41,24 +41,19 @@ module "networking" {
   tags = local.common_tags
 }
 
-# Producer namespace for writes (serverless)
-module "producer" {
-  source = "./modules/producer"
-  
-  namespace_name  = "${var.project_name}-producer"
-  database_name   = var.database_name
-  master_username = var.master_username
-  master_password = var.master_password
-  base_capacity   = var.producer_base_capacity
-  max_capacity    = var.producer_max_capacity
-  
-  vpc_id            = module.networking.vpc_id
-  subnet_ids        = module.networking.subnet_ids
-  security_group_id = module.networking.producer_security_group_id
-  
-  environment = var.environment
-  project     = var.project_name
+# Data source to read traditional deployment outputs (producer cluster)
+data "terraform_remote_state" "traditional" {
+  backend = "s3"
+  config = {
+    bucket = "terraform-state-redshift-migration"
+    key    = "traditional/terraform.tfstate"
+    region = var.aws_region
+  }
 }
+
+# Note: Producer is now provided by the traditional deployment
+# The traditional deployment manages the producer Redshift cluster
+# Consumers will establish data sharing with the traditional producer
 
 # Create multiple generic consumer instances
 module "consumers" {
@@ -85,9 +80,8 @@ module "consumers" {
   
   tags = local.common_tags
   
-  # CRITICAL: Consumers must wait for producer to be created first
-  # This ensures data sharing can be established properly
-  depends_on = [module.producer]
+  # Consumers can be created independently as producer is in traditional deployment
+  # Data sharing will be established after both are ready
 }
 
 # Network Load Balancer to distribute queries across consumers
@@ -119,38 +113,5 @@ module "nlb" {
   depends_on = [module.consumers]
 }
 
-# Snapshot Restoration
-# This module restores a snapshot to the producer namespace after deployment
-module "snapshot_restore" {
-  source = "./modules/snapshot-restore"
-  
-  environment           = var.environment
-  producer_endpoint     = try(module.producer.endpoint[0].address, "")
-  producer_namespace_id = module.producer.namespace_id
-  
-  # Create consumer configuration map
-  consumer_configs = {
-    for idx, consumer in module.consumers : 
-    "consumer-${idx}" => {
-      namespace_id = consumer.namespace_id
-      endpoint     = try(consumer.endpoint[0].address, "")
-    }
-  }
-  
-  master_username = var.master_username
-  master_password = var.master_password
-  database_name   = var.database_name
-  aws_region      = var.aws_region
-  
-  # Snapshot restoration settings (if configured)
-  restore_from_snapshot = var.restore_from_snapshot
-  snapshot_identifier   = var.snapshot_identifier
-  force_restore         = var.force_restore
-  
-  # Ensure snapshot restore runs after ALL infrastructure is ready
-  depends_on = [
-    module.producer,
-    module.consumers,
-    module.nlb
-  ]
-}
+# Note: Snapshot restoration removed since we're using existing producer from traditional deployment
+# Data sharing will be configured manually between traditional producer and serverless consumers

@@ -10,7 +10,7 @@ redshift-playground/
     ├── golden-architecture/        # ⭐ Main: Serverless with NLB & data sharing
     ├── traditional/                # Legacy: Traditional cluster deployment
     ├── monitoring/                 # Python+Curses monitoring TUI utils
-    └── data-generation/            # Sample airline data generator
+    └── data-generation/            # Sample airline data generation
 ```
 
 ## 🚀 Quick Start
