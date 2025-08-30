@@ -87,6 +87,17 @@ locals {
   subnet_ids = var.create_subnets ? aws_subnet.redshift[*].id : data.aws_subnets.existing[0].ids
 }
 
+# Get the actual CIDR blocks of the subnets we're using
+data "aws_subnet" "actual" {
+  count = length(local.subnet_ids)
+  id    = local.subnet_ids[count.index]
+}
+
+locals {
+  # Use actual subnet CIDRs for security group rules
+  actual_subnet_cidrs = data.aws_subnet.actual[*].cidr_block
+}
+
 # Internet Gateway (if creating VPC)
 resource "aws_internet_gateway" "main" {
   count = var.create_vpc ? 1 : 0
@@ -164,27 +175,75 @@ resource "aws_security_group" "producer" {
   )
 }
 
-# Security group for consumer workgroups
-resource "aws_security_group" "consumer" {
-  name_prefix = "redshift-consumer-"
-  description = "Security group for Redshift consumer workgroups"
+# Security group for NLB (Network Load Balancer)
+# Controls who can send traffic TO the load balancer
+resource "aws_security_group" "nlb" {
+  name_prefix = "redshift-nlb-"
+  description = "Security group for Redshift NLB - controls inbound traffic to load balancer"
   vpc_id      = local.vpc_id
 
+  # Ingress: Allow traffic from clients to the NLB on Redshift port
   ingress {
     from_port   = 5439
     to_port     = 5439
     protocol    = "tcp"
     cidr_blocks = [var.allowed_ip]
-    description = "Redshift port - user access"
+    description = "Redshift port - client access to NLB"
   }
   
-  # Allow access from within VPC (for NLB health checks and connections)
+  # Additional ingress for VPC-internal access if needed
   ingress {
     from_port   = 5439
     to_port     = 5439
     protocol    = "tcp"
-    cidr_blocks = ["10.0.0.0/16"]  # VPC CIDR
-    description = "Redshift port - VPC internal access (NLB)"
+    cidr_blocks = ["10.0.0.0/16"]  # VPC CIDR for internal clients
+    description = "Redshift port - VPC internal access to NLB"
+  }
+
+  # Egress: Allow all outbound traffic (will be refined by target security groups)
+  # The consumer security groups will control what the NLB can actually reach
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+    description = "Allow all outbound traffic"
+  }
+
+  tags = merge(
+    var.tags,
+    {
+      Name        = "redshift-nlb-sg"
+      Environment = var.environment
+      Purpose     = "nlb-load-balancer"
+    }
+  )
+}
+
+# Security group for consumer workgroups (Redshift targets)
+# Controls who can send traffic TO the Redshift consumer instances
+resource "aws_security_group" "consumer" {
+  name_prefix = "redshift-consumer-"
+  description = "Security group for Redshift consumer workgroups - ensures traffic only from NLB"
+  vpc_id      = local.vpc_id
+  
+  # Optional: Direct admin access for troubleshooting (can be removed in production)
+  ingress {
+    from_port   = 5439
+    to_port     = 5439
+    protocol    = "tcp"
+    cidr_blocks = [var.allowed_ip]
+    description = "Direct admin access for troubleshooting (optional)"
+  }
+  
+  # CRITICAL: Allow health checks from NLB subnet CIDRs
+  # NLB health checks come from the NLB node IPs within the subnets
+  ingress {
+    from_port   = 5439
+    to_port     = 5439
+    protocol    = "tcp"
+    cidr_blocks = local.actual_subnet_cidrs
+    description = "NLB health checks from subnet CIDRs"
   }
 
   egress {
@@ -192,6 +251,7 @@ resource "aws_security_group" "consumer" {
     to_port     = 0
     protocol    = "-1"
     cidr_blocks = ["0.0.0.0/0"]
+    description = "Allow all outbound traffic"
   }
 
   tags = merge(
@@ -199,7 +259,19 @@ resource "aws_security_group" "consumer" {
     {
       Name        = "redshift-consumer-sg"
       Environment = var.environment
-      Purpose     = "consumer-access"
+      Purpose     = "consumer-targets"
     }
   )
+}
+
+# Add ingress rules to consumer SG from NLB SG (for client traffic through NLB)
+# This allows actual client traffic that flows through the NLB
+resource "aws_security_group_rule" "consumer_from_nlb" {
+  type                     = "ingress"
+  from_port                = 5439
+  to_port                  = 5439
+  protocol                 = "tcp"
+  source_security_group_id = aws_security_group.nlb.id
+  security_group_id        = aws_security_group.consumer.id
+  description              = "Client traffic routed through NLB"
 }

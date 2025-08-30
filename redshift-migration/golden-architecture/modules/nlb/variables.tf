@@ -31,6 +31,13 @@ variable "consumer_count" {
   description = "Number of consumers for target group attachments"
   type        = number
 }
+
+variable "security_group_ids" {
+  description = "List of security group IDs to attach to the NLB"
+  type        = list(string)
+  default     = []
+}
+
 variable "tags" {
   description = "Tags to apply to all resources"
   type        = map(string)

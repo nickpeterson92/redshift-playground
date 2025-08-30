@@ -1,0 +1,52 @@
+{
+  "start_time": "2025-08-24T06:43:47.812656",
+  "end_time": "2025-08-24T08:43:49.188630",
+  "duration_hours": 2.0,
+  "max_threads": 20,
+  "clusters": {
+    "sales": "dev-consumer-sales-cluster.cjsvyvjxsdqo.us-west-2.redshift.amazonaws.com",
+    "ops": "dev-consumer-ops-cluster.cjsvyvjxsdqo.us-west-2.redshift.amazonaws.com"
+  },
+  "statistics": {
+    "sales": {
+      "queries_executed": 56593,
+      "errors": 5,
+      "query_types": {
+        "simple_revenue_today": 7817,
+        "medium_loyalty_distribution": 4960,
+        "complex_revenue_trend": 2523,
+        "agg_monthly_summary": 2595,
+        "join_flight_bookings": 2666,
+        "window_booking_patterns": 2596,
+        "medium_campaign_performance": 5149,
+        "simple_booking_recent": 7614,
+        "simple_customer_count": 7902,
+        "medium_booking_by_class": 5098,
+        "complex_customer_360": 2537,
+        "complex_cohort_analysis": 2601,
+        "window_customer_ranking": 2535
+      },
+      "total_duration_ms": 4661281.179904938
+    },
+    "ops": {
+      "queries_executed": 54919,
+      "errors": 5,
+      "query_types": {
+        "simple_maintenance_count": 7660,
+        "simple_metrics_recent": 7446,
+        "window_crew_rankings": 2384,
+        "simple_crew_today": 7521,
+        "medium_operational_efficiency": 5041,
+        "agg_daily_performance": 2447,
+        "complex_fleet_maintenance": 2558,
+        "medium_maintenance_by_type": 4920,
+        "window_maintenance_schedule": 2497,
+        "join_fleet_operations": 2567,
+        "complex_turnaround_analysis": 2486,
+        "medium_crew_utilization": 4989,
+        "complex_crew_performance": 2403
+      },
+      "total_duration_ms": 6234227.046012878
+    }
+  }
+}

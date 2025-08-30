@@ -94,6 +94,10 @@ module "nlb" {
   subnet_ids     = module.networking.subnet_ids
   consumer_count = var.consumer_count
   
+  # Security group for the NLB (controls who can access the load balancer)
+  # The consumer security groups are configured to only accept traffic from this NLB SG
+  security_group_ids = [module.networking.nlb_security_group_id]
+  
   # Create endpoint list using stable VPC endpoint IPs for NLB
   # Use try() to handle cases where endpoints don't exist yet or during destroy
   consumer_endpoints = try(

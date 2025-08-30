@@ -17,3 +17,8 @@ output "consumer_security_group_id" {
   description = "Security group ID for consumer workgroups"
   value       = aws_security_group.consumer.id
 }
+
+output "nlb_security_group_id" {
+  description = "Security group ID for Network Load Balancer"
+  value       = aws_security_group.nlb.id
+}

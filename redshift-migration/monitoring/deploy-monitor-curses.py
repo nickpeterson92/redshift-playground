@@ -582,8 +582,8 @@ class CursesMonitor:
                                 self.resources["total_targets"] = total
                                 self.resources["target_states"] = state_counts
                             
-                            # Check if all targets are healthy (3 per consumer for multi-AZ)
-                            expected_targets = self.consumer_count * 3
+                            # Check if all targets are healthy (1 managed VPC endpoint per consumer)
+                            expected_targets = self.consumer_count
                             
                             if healthy >= expected_targets:
                                 self.set_phase_status("targets", "complete")
@@ -1284,8 +1284,8 @@ class CursesMonitor:
                             stdscr.addstr(y + i, 45, "Targets: ✗ Destroyed")
                             stdscr.attroff(curses.color_pair(1))
                         else:
-                            # Each consumer has 3 IPs (one per AZ), so total targets = consumers * 3
-                            expected_targets = self.consumer_count * 3
+                            # Each consumer has 1 managed VPC endpoint IP for client connections
+                            expected_targets = self.consumer_count
                             target_states = resources.get('target_states', {})
                             
                             # Show detailed target status
