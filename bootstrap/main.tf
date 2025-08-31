@@ -26,7 +26,7 @@ module "foundation_network" {
   tags = local.common_tags
 }
 
-# COMMENTED OUT - Using existing backend from data-sharing deployment
+# COMMENTED OUT - Using existing backend from golden-architecture deployment
 # module "terraform_backend" {
 #   source = "./modules/backend"
 #   
