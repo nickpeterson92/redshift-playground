@@ -2,7 +2,8 @@
 
 ## Backend Setup
 
-**We're using your EXISTING backend!** 
+**We're using your EXISTING backend!**
+
 - S3 Bucket: `terraform-state-redshift-migration`
 - DynamoDB Table: `terraform-state-locks`
 - Region: `us-west-2`
@@ -45,13 +46,13 @@ terraform init -backend-config=environments/dev/backend-config.hcl
 
 Both deployments use the SAME S3 bucket with DIFFERENT paths:
 
-```
+```markdown
 s3://terraform-state-redshift-migration/
 ├── bootstrap/terraform.tfstate              # Bootstrap infrastructure
 └── redshift-data-sharing/dev/terraform.tfstate  # Your existing data-sharing
 ```
 
-## That's It!
+## That's It
 
 - Bootstrap creates VPC named `redshift-vpc-dev` and Harness delegate
 - Data-sharing finds the VPC by name  

@@ -4,7 +4,7 @@ This directory contains the foundational infrastructure that must be deployed BE
 
 ## Architecture Overview
 
-```
+```markdown
                     ┌────────────────────────────┐
                     │   Harness Platform (SaaS)  │
                     │      (Internet/Cloud)      │
@@ -56,18 +56,21 @@ This directory contains the foundational infrastructure that must be deployed BE
 ## Components
 
 ### 1. Foundation Network (`modules/networking/`)
+
 - Persistent VPC that hosts all infrastructure
 - Public/Private subnets across multiple AZs
 - NAT Gateways for outbound internet access
 - VPC Endpoints for AWS services (S3, ECR)
 
 ### 2. Terraform Backend (`modules/backend/`)
+
 - S3 bucket for Terraform state storage
 - DynamoDB table for state locking
 - KMS encryption for security
 - IAM policies for access control
 
 ### 3. Harness Delegate (`modules/harness-delegate/`)
+
 - ECS Fargate cluster and service
 - Auto-scaling configuration for high availability
 - IAM roles with permissions to manage:
@@ -77,6 +80,7 @@ This directory contains the foundational infrastructure that must be deployed BE
   - Terraform state in S3
 
 ### 4. Optional Bastion Host (`modules/bastion/`)
+
 - EC2 instance for debugging and manual access
 - PostgreSQL client pre-installed
 - Security group with IP allowlist
@@ -152,6 +156,7 @@ subnet_ids = ["subnet-xxx"]   # From bootstrap output
 2. Navigate to Project Settings → Delegates
 3. Verify your delegate shows as "Connected"
 4. Check CloudWatch logs if issues:
+
    ```bash
    aws logs tail /ecs/mycompany-dev-delegate --follow
    ```
@@ -171,13 +176,15 @@ terraform apply -var="delegate_replicas=3"
 ### Cost Optimization
 
 For non-production environments:
+
 - Set `single_nat_gateway = true` (saves ~$45/month per extra NAT)
 - Reduce `delegate_replicas = 1` (saves ~$20/month)
-- Use smaller delegate size: `delegate_cpu = "512"` 
+- Use smaller delegate size: `delegate_cpu = "512"`
 
 ### Monitoring
 
 Check delegate health:
+
 ```bash
 # View ECS service status
 aws ecs describe-services \
@@ -209,17 +216,20 @@ terraform destroy
 ## Troubleshooting
 
 ### Delegate Not Connecting
+
 - Check security groups allow outbound 443
 - Verify NAT Gateway is working
 - Check delegate token is correct
 - Review CloudWatch logs for errors
 
 ### Terraform State Issues
+
 - Ensure S3 bucket exists and is accessible
 - Verify DynamoDB table for locking
 - Check IAM permissions for state access
 
 ### Cost Alerts
+
 - Set up AWS Budget alerts for unexpected charges
 - Monitor NAT Gateway data transfer costs
 - Review ECS Fargate usage
@@ -227,6 +237,7 @@ terraform destroy
 ## Next Steps
 
 After bootstrap deployment:
+
 1. Create Harness pipelines for application deployments
 2. Configure Harness environments (dev/staging/prod)
 3. Set up Harness triggers and workflows
